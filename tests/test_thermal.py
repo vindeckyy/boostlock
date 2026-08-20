@@ -412,9 +412,9 @@ class TestThermalGuard:
 
     def test_initialization_defaults(self, temp_sysfs: MockSysfsThermalTree) -> None:
         guard = ThermalGuard(sysfs_root=temp_sysfs.root)
-        assert guard.thermal_warn_c == 75.0
-        assert guard.thermal_limit_c == 85.0
-        assert guard.thermal_recover_c == 70.0
+        assert guard.thermal_warn_c == 90.0
+        assert guard.thermal_limit_c == 100.0
+        assert guard.thermal_recover_c == 85.0
         assert guard.state == ThermalState.NORMAL
         assert guard.is_tripped is False
         assert guard.clamp_factor == 1.0
@@ -455,16 +455,16 @@ class TestThermalGuard:
         on_warn.assert_not_called()
         on_trip.assert_not_called()
 
-        # 2. Warning Zone (80C: midpoint between 75C and 85C)
-        # Linear clamp: (85 - 80) / (85 - 75) = 0.5
-        reading = guard.update_state(80.0)
+        # 2. Warning Zone (95C: midpoint between 90C and 100C)
+        # Linear clamp: (100 - 95) / (100 - 90) = 0.5
+        reading = guard.update_state(95.0)
         assert reading.state == ThermalState.WARNING
         assert reading.clamp_factor == pytest.approx(0.5, abs=0.01)
         assert guard.is_tripped is False
         on_warn.assert_called_once_with(pytest.approx(0.5, abs=0.01))
 
-        # 3. Critical Zone (85C >= 85C limit)
-        reading = guard.update_state(85.5)
+        # 3. Critical Zone (100.5C >= 100C limit)
+        reading = guard.update_state(100.5)
         assert reading.state == ThermalState.CRITICAL
         assert reading.clamp_factor == 0.0
         assert guard.is_tripped is True
@@ -474,33 +474,33 @@ class TestThermalGuard:
         on_recovery = MagicMock()
         guard = ThermalGuard(
             sysfs_root=temp_sysfs.root,
-            thermal_warn_c=75.0,
-            thermal_limit_c=85.0,
-            thermal_recover_c=70.0,
+            thermal_warn_c=90.0,
+            thermal_limit_c=100.0,
+            thermal_recover_c=85.0,
             on_recovery=on_recovery,
         )
 
         # Trip the guard
-        guard.update_state(88.0)
+        guard.update_state(101.0)
         assert guard.state == ThermalState.CRITICAL
         assert guard.is_tripped is True
 
-        # Cooled down to 82C (below limit 85C, but above recover 70C) -> Still throttled/tripped!
-        reading1 = guard.update_state(82.0)
+        # Cooled down to 97C (below limit 100C, but above recover 85C) -> Still throttled/tripped!
+        reading1 = guard.update_state(97.0)
         assert reading1.state == ThermalState.THROTTLED
         assert reading1.clamp_factor == 0.0
         assert guard.is_tripped is True
         on_recovery.assert_not_called()
 
-        # Cooled down to 72C (below warn 75C, but above recover 70C) -> Still throttled/tripped!
-        reading2 = guard.update_state(72.0)
+        # Cooled down to 87C (below warn 90C, but above recover 85C) -> Still throttled/tripped!
+        reading2 = guard.update_state(87.0)
         assert reading2.state == ThermalState.THROTTLED
         assert reading2.clamp_factor == 0.0
         assert guard.is_tripped is True
         on_recovery.assert_not_called()
 
-        # Cooled down to 69.5C (below recover 70C) -> Full recovery!
-        reading3 = guard.update_state(69.5)
+        # Cooled down to 84.5C (below recover 85C) -> Full recovery!
+        reading3 = guard.update_state(84.5)
         assert reading3.state == ThermalState.NORMAL
         assert reading3.clamp_factor == 1.0
         assert guard.is_tripped is False
@@ -515,20 +515,20 @@ class TestThermalGuard:
 
         guard = ThermalGuard(
             sysfs_root=temp_sysfs.root,
-            thermal_warn_c=75.0,
-            thermal_limit_c=85.0,
-            thermal_recover_c=70.0,
+            thermal_warn_c=90.0,
+            thermal_limit_c=100.0,
+            thermal_recover_c=85.0,
             on_warning=bad_warn,
             on_tripwire=bad_trip,
             on_recovery=bad_rec,
         )
 
         # Warning
-        guard.update_state(80.0)
+        guard.update_state(95.0)
         # Critical
-        guard.update_state(90.0)
+        guard.update_state(101.0)
         # Recovery
-        guard.update_state(65.0)
+        guard.update_state(84.0)
         assert guard.state == ThermalState.NORMAL
 
     def test_warning_span_zero_clamp(self, temp_sysfs: MockSysfsThermalTree) -> None:
@@ -537,29 +537,29 @@ class TestThermalGuard:
             thermal_warn_c=85.0,
             thermal_limit_c=85.0,
         )
-        guard.update_state(85.0)
+        guard.update_state(100.0)
         assert guard.clamp_factor == 0.0
 
     def test_calculate_duty_clamp(self, temp_sysfs: MockSysfsThermalTree) -> None:
         guard = ThermalGuard(
             sysfs_root=temp_sysfs.root,
-            thermal_warn_c=75.0,
-            thermal_limit_c=85.0,
-            thermal_recover_c=70.0,
+            thermal_warn_c=90.0,
+            thermal_limit_c=100.0,
+            thermal_recover_c=85.0,
         )
 
         # Base duty cycle 30.0%
         # At 60C (Normal): 30.0 * 1.0 = 30.0
         assert guard.calculate_duty_clamp(30.0, temp_c=60.0) == 30.0
 
-        # At 80C (Warning): 30.0 * 0.5 = 15.0
-        assert guard.calculate_duty_clamp(30.0, temp_c=80.0) == pytest.approx(15.0, abs=0.1)
+        # At 95C (Warning): 30.0 * 0.5 = 15.0
+        assert guard.calculate_duty_clamp(30.0, temp_c=95.0) == pytest.approx(15.0, abs=0.1)
 
-        # At 86C (Critical): 0.0
-        assert guard.calculate_duty_clamp(30.0, temp_c=86.0) == 0.0
+        # At 101C (Critical): 0.0
+        assert guard.calculate_duty_clamp(30.0, temp_c=101.0) == 0.0
 
-        # While tripped, even if temp is 72C: 0.0
-        assert guard.calculate_duty_clamp(30.0, temp_c=72.0) == 0.0
+        # While tripped, even if temp is 87C: 0.0
+        assert guard.calculate_duty_clamp(30.0, temp_c=87.0) == 0.0
 
     def test_get_cpu_temperature_and_sensor_reading(
         self, temp_sysfs: MockSysfsThermalTree
@@ -625,7 +625,7 @@ class TestThermalGuard:
             assert guard.state == ThermalState.NORMAL
 
             # Simulate heat spike past limit
-            (h_dir / "temp1_input").write_text("90000\n", encoding="utf-8")
+            (h_dir / "temp1_input").write_text("105000\n", encoding="utf-8")
             time.sleep(0.06)
             assert guard.is_tripped is True
             assert guard.state == ThermalState.CRITICAL

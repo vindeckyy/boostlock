@@ -24,9 +24,9 @@ class BoostLockConfig:
     min_pulse_duty_pct: float = 5.0      # Minimum pulse stimulation duty cycle (%)
     max_pulse_duty_pct: float = 50.0     # Maximum pulse stimulation duty cycle (%)
     duty_step_pct: float = 2.0           # Step size for duty cycle adjustment (%)
-    thermal_limit_c: float = 85.0        # Tripwire limit: emergency disengagement (C)
-    thermal_warn_c: float = 75.0         # Warning limit: proportional duty cycle throttling (C)
-    thermal_recover_c: float = 70.0      # Recovery hysteresis floor: re-engage boost (C)
+    thermal_limit_c: float = 100.0        # Tripwire limit: emergency disengagement (C)
+    thermal_warn_c: float = 90.0         # Warning limit: proportional duty cycle throttling (C)
+    thermal_recover_c: float = 85.0      # Recovery hysteresis floor: re-engage boost (C)
     poll_interval_ms: int = 100          # Sensor & closed-loop poll interval (ms)
     dma_latency_us: int = 0              # PM QoS latency constraint in microseconds (0 = prevent C2+)
     governor: str = "performance"        # CPU frequency scaling governor
@@ -35,6 +35,22 @@ class BoostLockConfig:
     socket_path: str = "/var/run/boostlock/boostlock.sock"
     snapshot_path: str = "/var/run/boostlock/snapshot.json"
     log_file: str = "/var/log/boostlock.log"
+
+    @property
+    def pulse_duty_cycle(self) -> float:
+        """Legacy alias for min_pulse_duty_pct as 0-1 fraction."""
+        return self.min_pulse_duty_pct / 100.0
+
+    @pulse_duty_cycle.setter
+    def pulse_duty_cycle(self, value: float) -> None:
+        # Accept 0-1 fraction (from CLI) or 0-100 percent
+        if value <= 1.0:
+            pct = value * 100.0
+        else:
+            pct = value
+        self.min_pulse_duty_pct = float(pct)
+        if self.max_pulse_duty_pct < self.min_pulse_duty_pct:
+            self.max_pulse_duty_pct = float(pct)
 
     def validate(self) -> None:
         """Validate configuration settings and raise ConfigValidationError on invalid values."""

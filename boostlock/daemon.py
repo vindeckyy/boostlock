@@ -428,25 +428,70 @@ class BoostLockDaemon:
             uptime = (time.time() - self._start_time) if self._start_time else 0.0
 
         cpus = self.sysfs.get_online_cpus()
-        cpu_states = self.sysfs.read_all_cpus_state()
-
+        # Keep sysfs reads minimal and fault-tolerant for IPC responsiveness
+        try:
+            cpu_states = self.sysfs.read_all_cpus_state()
+        except Exception:
+            cpu_states = {}
+        try:
+            thermal_status = self.thermal_guard.get_status()
+        except Exception:
+            thermal_status = {}
+        try:
+            pulse_status = self.pulse_engine.get_status()
+        except Exception:
+            pulse_status = {}
+        # per_cpu flat mapping for CLI
+        per_cpu = {}
+        try:
+            for cpu_id, state in cpu_states.items():
+                per_cpu[str(cpu_id)] = {
+                    "cur_freq_khz": state.get("scaling_cur_freq") or state.get("cur_freq_khz") or 0,
+                    "governor": state.get("governor"),
+                }
+        except Exception:
+            per_cpu = {}
+        # duty_cycle: pulse_status has overall_duty_cycle_pct
+        duty = None
+        try:
+            if isinstance(pulse_status, dict):
+                if "overall_duty_cycle_pct" in pulse_status:
+                    duty = pulse_status["overall_duty_cycle_pct"] / 100.0
+                elif "current_duty_pct" in pulse_status:
+                    duty = pulse_status["current_duty_pct"] / 100.0
+                else:
+                    duty = pulse_status.get("duty_cycle")
+        except Exception:
+            duty = None
+        temp_c = None
+        try:
+            if isinstance(thermal_status, dict):
+                temp_c = thermal_status.get("current_temp_c")
+        except Exception:
+            temp_c = None
         return {
             "state": state_val,
+            "boost_state": state_val,
             "is_locked_boost": is_locked,
             "pid": os.getpid(),
             "uptime_seconds": round(uptime, 2),
             "target_frequency_khz": self.config.target_frequency_khz,
+            "target_freq_khz": self.config.target_frequency_khz,
             "governor": self.config.governor,
             "epp": self.config.epp,
-            "thermal": self.thermal_guard.get_status(),
+            "thermal": thermal_status,
+            "temperature_c": temp_c,
+            "duty_cycle": duty,
             "pm_qos": {
                 "is_locked": self.pm_qos.is_locked,
                 "target_latency_us": self.pm_qos.target_latency_us,
                 "using_fallback": self.pm_qos.using_fallback,
             },
-            "pulse_engine": self.pulse_engine.get_status(),
+            "pm_qos_active": self.pm_qos.is_locked,
+            "pulse_engine": pulse_status,
             "online_cpus_count": len(cpus),
             "cpu_states": {str(k): v for k, v in cpu_states.items()},
+            "per_cpu": per_cpu,
         }
 
     def get_metrics(self) -> Dict[str, Any]:
@@ -594,8 +639,23 @@ class BoostLockDaemon:
         # Set boost and CPB
         self.sysfs.enable_all_boost()
 
-        # Set scaling min frequency
-        self.sysfs.set_scaling_min_freq(self.config.target_frequency_khz, cpus=online_cpus)
+        # Set scaling min frequency - clamp to max available to avoid EINVAL when target (4.0 GHz boost) exceeds scaling_max (3.0 GHz base)
+        try:
+            max_khz = self.sysfs.get_scaling_max_freq(online_cpus[0]) if online_cpus else None
+        except Exception:
+            max_khz = None
+        # Use target if within available range, else use max base freq
+        try:
+            available = self.sysfs.get_available_frequencies(online_cpus[0]) if online_cpus else []
+        except Exception:
+            available = []
+        if max_khz and self.config.target_frequency_khz > max_khz:
+            # Check if target is a valid boost freq (via boost flag), else clamp to max
+            # For acpi-cpufreq on this Ryzen, boost is via cpb flag, min should be max base
+            min_freq_to_set = max_khz
+        else:
+            min_freq_to_set = self.config.target_frequency_khz
+        self.sysfs.set_scaling_min_freq(min_freq_to_set, cpus=online_cpus)
 
         # Set Energy Performance Preference
         self.sysfs.set_energy_performance_preference(self.config.epp, cpus=online_cpus)

@@ -253,6 +253,10 @@ class IPCClient:
         except Exception:
             return False
 
+    def send(self, request: Request, timeout: Optional[float] = None) -> Response:
+        """Legacy alias for send_request (used by CLI and tests)."""
+        return self.send_request(request, timeout=timeout)
+
     def send_request(self, request: Request, timeout: Optional[float] = None) -> Response:
         """Send a Request message to the daemon and receive Response."""
         eff_timeout = timeout if timeout is not None else self.timeout_s

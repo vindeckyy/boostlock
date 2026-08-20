@@ -333,6 +333,68 @@ class TestPMQoSController:
         assert controller.lock() is True
         controller.unlock()
 
+    def test_discover_planned_fallback_paths_excludes_invalid_and_shallow_entries(
+        self,
+        tmp_path: Path,
+        mock_sysfs_tree: Path,
+    ) -> None:
+        """Test planned fallback discovery returns only eligible disable nodes."""
+        cpu0_idle = mock_sysfs_tree / "devices" / "system" / "cpu" / "cpu0" / "cpuidle"
+        (cpu0_idle / "metadata").mkdir()
+        (cpu0_idle / "stateinvalid").mkdir()
+
+        controller = PMQoSController(
+            device_path=tmp_path / "missing_dma",
+            sysfs_root=mock_sysfs_tree,
+            min_fallback_state_index=1,
+        )
+
+        paths = controller.discover_fallback_paths()
+
+        assert paths == [
+            mock_sysfs_tree / "devices/system/cpu/cpu0/cpuidle/state1/disable",
+            mock_sysfs_tree / "devices/system/cpu/cpu0/cpuidle/state2/disable",
+            mock_sysfs_tree / "devices/system/cpu/cpu1/cpuidle/state1/disable",
+            mock_sysfs_tree / "devices/system/cpu/cpu1/cpuidle/state2/disable",
+        ]
+
+    def test_discover_planned_fallback_paths_returns_empty_when_disabled(
+        self,
+        tmp_path: Path,
+        mock_sysfs_tree: Path,
+    ) -> None:
+        """Test planned fallback discovery honors the fallback setting."""
+        controller = PMQoSController(
+            device_path=tmp_path / "missing_dma",
+            sysfs_root=mock_sysfs_tree,
+            enable_sysfs_fallback=False,
+        )
+
+        assert controller.discover_fallback_paths() == []
+
+    def test_activate_planned_fallback_records_states_for_unlock(
+        self,
+        tmp_path: Path,
+        mock_sysfs_tree: Path,
+    ) -> None:
+        """Test a transaction-applied fallback is restored through the controller."""
+        disable_path = (
+            mock_sysfs_tree
+            / "devices/system/cpu/cpu0/cpuidle/state1/disable"
+        )
+        disable_path.write_text("1\n")
+        controller = PMQoSController(
+            device_path=tmp_path / "missing_dma",
+            sysfs_root=mock_sysfs_tree,
+        )
+
+        controller.activate_planned_fallback({disable_path: "0"})
+
+        assert controller.is_locked
+        assert controller.using_fallback
+        controller.unlock()
+        assert disable_path.read_text() == "0\n"
+
     def test_sysfs_cpuidle_fallback_permission_error(self, tmp_path: Path, mock_sysfs_tree: Path) -> None:
         """Test fallback failure when sysfs cpuidle write fails with permission error."""
         non_existent_dev = tmp_path / "non_existent_dma_latency"
@@ -408,6 +470,69 @@ class TestPMQoSController:
         with patch("os.write", side_effect=OSError(22, "Invalid argument")):
             with pytest.raises(PMQoSError, match="Failed to write target latency"):
                 controller.lock()
+
+    def test_write_failure_after_open_closes_unassigned_descriptor(
+        self,
+        tmp_path: Path,
+        mock_sysfs_tree: Path,
+    ) -> None:
+        """Test a failed initial DMA write closes its local descriptor."""
+        controller = PMQoSController(
+            device_path=tmp_path / "cpu_dma_latency",
+            sysfs_root=mock_sysfs_tree,
+            enable_sysfs_fallback=False,
+        )
+
+        with patch("os.open", return_value=73), \
+             patch("os.write", side_effect=OSError("write failed")), \
+             patch("os.close") as close:
+            with pytest.raises(PMQoSError, match="write failed"):
+                controller.lock(allow_fallback=False)
+
+        close.assert_called_once_with(73)
+        assert controller.fd is None
+        assert not controller.is_locked
+
+    def test_write_failure_reports_local_descriptor_close_error(
+        self,
+        tmp_path: Path,
+        mock_sysfs_tree: Path,
+    ) -> None:
+        """Test a post-open write failure retains its descriptor close failure."""
+        controller = PMQoSController(
+            device_path=tmp_path / "cpu_dma_latency",
+            sysfs_root=mock_sysfs_tree,
+            enable_sysfs_fallback=False,
+        )
+
+        with patch("os.open", return_value=73), \
+             patch("os.write", side_effect=OSError("write failed")), \
+             patch("os.close", side_effect=OSError("close failed")):
+            with pytest.raises(PMQoSError, match="write failed.*close failed"):
+                controller.lock(allow_fallback=False)
+
+        assert controller.fd is None
+        assert not controller.is_locked
+
+    def test_strict_release_propagates_descriptor_close_error(
+        self,
+        tmp_path: Path,
+        mock_sysfs_tree: Path,
+    ) -> None:
+        """Test transaction release exposes a descriptor close error."""
+        controller = PMQoSController(
+            device_path=tmp_path / "cpu_dma_latency",
+            sysfs_root=mock_sysfs_tree,
+        )
+        controller._fd = 73
+        controller._is_locked = True
+
+        with patch("os.close", side_effect=OSError("close failed")):
+            with pytest.raises(OSError, match="close failed"):
+                controller.release_strict()
+
+        assert controller.fd is None
+        assert not controller.is_locked
 
     def test_get_current_latency_from_file(self, tmp_path: Path, mock_sysfs_tree: Path) -> None:
         """Test reading current latency from device node."""

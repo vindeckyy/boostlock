@@ -5,7 +5,7 @@ After=local-fs.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/boostlock start --target 4000 --max-temp 100 --duty 15
+ExecStart=/usr/local/bin/boostlock start --max-temp 100 --duty 15
 ExecStop=/usr/local/bin/boostlock stop
 Restart=on-failure
 RestartSec=5

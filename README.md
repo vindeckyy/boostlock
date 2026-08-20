@@ -10,7 +10,16 @@ It requires root and can raise idle power use and temperature. Use it on a syste
 - Python 3.10 or later
 - Root access for the CPU and PM QoS settings
 
-BoostLock works best on systems that expose `scaling_governor`, boost controls, and `/dev/cpu_dma_latency`. Missing optional kernel files are skipped, and the requested boost frequency remains subject to the CPU and kernel.
+BoostLock operates on Linux cpufreq policies instead of CPU model names. It needs a writable governor and policy frequency limits. Boost, CPB, EPP, EPB, PM QoS, and cpuidle controls are optional and reported as skipped when the kernel does not expose them.
+
+| Linux capability | Result |
+| --- | --- |
+| Writable cpufreq policy governor and limits | Supported |
+| `intel_pstate`, `amd-pstate`, `acpi-cpufreq`, or an architecture-neutral policy driver | Eligible through the same policy checks |
+| Boost, CPB, EPP, EPB, PM QoS, or cpuidle | Applied only when available and writable |
+| Firmware-only frequency management or no usable policy | Start fails before changing settings |
+
+Intel, AMD, and ARM policy fixtures are covered by the automated tests. A policy-capable driver is eligible, but that does not promise a particular boost frequency.
 
 ## Install
 
@@ -31,13 +40,13 @@ boostlock --help
 Run in the foreground while testing a new machine:
 
 ```bash
-sudo boostlock start --target 3900 --duty 5 --max-temp 90
+sudo boostlock start --target auto --duty 5 --max-temp 90
 ```
 
 Start a background daemon after checking the foreground run:
 
 ```bash
-sudo boostlock start --daemon --target 3900 --duty 5 --max-temp 90
+sudo boostlock start --daemon --target auto --duty 5 --max-temp 90
 sudo boostlock status
 ```
 
@@ -48,7 +57,7 @@ sudo boostlock stop
 sudo boostlock restore
 ```
 
-`--target` uses MHz. `--duty` is the initial pulse duty percentage. Start with a low duty value and increase it only if the reported frequency drops below the target.
+`--target` accepts a MHz value or `auto`. Omitting it selects `auto`, which uses each policy's active upper limit instead of guessing a boost clock. Numeric targets remain explicit requests and are clamped separately for every policy. `--duty` is the initial pulse duty percentage.
 
 ## What happens when it starts
 
@@ -64,10 +73,10 @@ Check the daemon before leaving it running:
 
 ```bash
 sudo boostlock status
-sudo boostlock bench --duration 10 --target 3900
+sudo boostlock bench --duration 10 --target auto
 ```
 
-The benchmark samples `scaling_cur_freq`. It reports what the kernel exposed during that run. It does not establish a stable frequency for every workload.
+The benchmark samples `scaling_cur_freq` and evaluates each selected policy against its own effective target. It reports what the kernel exposed during that run. It does not establish a stable frequency for every workload.
 
 ## Systemd
 
@@ -79,7 +88,7 @@ sudo systemctl enable --now boostlock
 sudo systemctl status boostlock
 ```
 
-The unit starts `/usr/local/bin/boostlock`. Verify that path exists on the target machine before enabling the service.
+The unit starts `/usr/local/bin/boostlock` without a fixed target, so it uses automatic per-policy targets. Verify that path exists on the target machine before enabling the service.
 
 ## Maintainer
 

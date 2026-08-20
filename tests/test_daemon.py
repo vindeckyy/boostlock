@@ -245,6 +245,27 @@ class TestPIDFileManager:
 class TestBoostLockDaemonLifecycle:
     """Tests for daemon startup, subsystem coordination, IPC requests, and teardown."""
 
+    def test_daemon_skips_pm_qos_when_no_device_or_cpuidle_fallback_exists(self, mock_env):
+        mock_env["dma_latency_path"].unlink()
+        daemon = BoostLockDaemon(
+            config=mock_env["config"],
+            sysfs_root=mock_env["sysfs_root"],
+            dma_latency_path=mock_env["dma_latency_path"],
+            pid_file=mock_env["pid_file"],
+            socket_path=mock_env["socket_path"],
+            snapshot_file=mock_env["snapshot_file"],
+        )
+
+        with patch.object(daemon.pm_qos, "lock", wraps=daemon.pm_qos.lock) as lock:
+            daemon.start()
+            try:
+                assert daemon.state == DaemonState.RUNNING
+                assert daemon.pm_qos.is_locked is False
+                assert daemon._pm_qos_skip_reason == "no usable PM QoS route"
+                lock.assert_not_called()
+            finally:
+                daemon.stop()
+
     def test_daemon_full_start_and_stop(self, mock_env):
         daemon = BoostLockDaemon(
             config=mock_env["config"],

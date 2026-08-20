@@ -10,7 +10,7 @@ import statistics
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .sysfs import SysfsController
 
@@ -63,6 +63,10 @@ class BenchResult:
 
     elapsed_s: float = 0.0
     """Actual elapsed wall time of the benchmark run."""
+    policy_id: Optional[str] = None
+    """Policy sampled for this result, when one target owns the samples."""
+    policy_results: Dict[str, BenchResult] = field(default_factory=dict)
+    """Per-policy results, each evaluated against that policy's target."""
 
     def format_report(self) -> str:
         """Return a human-readable multi-line benchmark report."""
@@ -89,6 +93,14 @@ class BenchResult:
         filled = int(round(compliance_pct / 100.0 * bar_width))
         bar = "#" * filled + "." * (bar_width - filled)
         lines.append(f"  Boost compliance : [{bar}] {compliance_pct:.1f}%")
+        if self.policy_results:
+            lines.append("")
+            lines.append("  Per-policy compliance:")
+            for policy_id, result in sorted(self.policy_results.items()):
+                lines.append(
+                    f"    {policy_id}: {result.target_khz / 1_000_000:.3f} GHz "
+                    f"target, {result.compliance_rate * 100.0:.1f}%"
+                )
         if self.thermal_gradient_c is not None:
             lines.append(f"  Thermal gradient : +{self.thermal_gradient_c:+.1f}C "
                          f"({self.temp_start_c:.1f}C -> {self.temp_end_c:.1f}C)")
@@ -142,7 +154,7 @@ class BenchmarkRunner:
 
     def __init__(
         self,
-        target_khz: int = 4_000_000,
+        target_khz: Union[int, str] = 4_000_000,
         duration_s: float = 10.0,
         sample_rate_hz: float = 20.0,
         sysfs_root: Optional[Path] = None,
@@ -152,7 +164,9 @@ class BenchmarkRunner:
             raise ValueError(f"duration_s must be positive, got {duration_s}")
         if sample_rate_hz <= 0:
             raise ValueError(f"sample_rate_hz must be positive, got {sample_rate_hz}")
-        if target_khz <= 0:
+        if target_khz != "auto" and (
+            not isinstance(target_khz, int) or target_khz <= 0
+        ):
             raise ValueError(f"target_khz must be positive, got {target_khz}")
 
         self.target_khz = target_khz
@@ -214,44 +228,168 @@ class BenchmarkRunner:
         elapsed = t_end - t_start
         temp_end = self._get_temperature()
 
-        return self._compute_result(temp_start, temp_end, elapsed)
+        policy_targets = self.resolve_policy_targets()
+        aggregate_target = (
+            self.target_khz
+            if isinstance(self.target_khz, int)
+            else max(
+                (details["effective_target_khz"] for details in policy_targets.values()),
+                default=4_000_000,
+            )
+        )
+        result = self._compute_result(temp_start, temp_end, elapsed, aggregate_target)
+        result.policy_results = self._policy_results(
+            policy_targets,
+            temp_start,
+            temp_end,
+            elapsed,
+        )
+        return result
+
+    def resolve_policy_targets(self) -> Dict[str, Dict[str, Any]]:
+        """Resolve each discovered policy to its own effective benchmark target."""
+        try:
+            policies = self._sysfs.discover_cpufreq_policies()
+        except (AttributeError, OSError):
+            policies = []
+
+        resolved: Dict[str, Dict[str, Any]] = {}
+        for policy in policies:
+            target, reason = self._effective_policy_target(policy)
+            if target is None:
+                continue
+            resolved[policy.identifier] = {
+                "member_cpus": list(policy.cpus),
+                "driver": policy.driver,
+                "requested_target": self.target_khz,
+                "effective_target_khz": target,
+                "clamp_reason": reason,
+            }
+
+        if resolved:
+            return resolved
+        target = self.target_khz if isinstance(self.target_khz, int) else 4_000_000
+        try:
+            cpu_ids = self._sysfs.get_online_cpus()
+        except Exception:
+            cpu_ids = []
+        return {
+            f"cpu{cpu_id}": {
+                "member_cpus": [cpu_id],
+                "driver": None,
+                "requested_target": self.target_khz,
+                "effective_target_khz": target,
+                "clamp_reason": "policy discovery unavailable",
+            }
+            for cpu_id in cpu_ids
+        }
+
+    def _effective_policy_target(self, policy: Any) -> tuple[Optional[int], Optional[str]]:
+        """Clamp one requested target within the limits exposed by that policy."""
+        lower_bounds = [
+            value
+            for value in (policy.hardware_min_khz, policy.active_min_khz)
+            if isinstance(value, int) and value > 0
+        ]
+        upper_bounds = [
+            value
+            for value in (policy.hardware_max_khz, policy.active_max_khz)
+            if isinstance(value, int) and value > 0
+        ]
+        if not lower_bounds or not upper_bounds:
+            return None, "policy frequency bounds unavailable"
+        lower_bound = max(lower_bounds)
+        upper_bound = min(upper_bounds)
+        if lower_bound > upper_bound:
+            return None, "policy frequency bounds are incompatible"
+        if self.target_khz == "auto":
+            return upper_bound, "automatic policy maximum"
+        assert isinstance(self.target_khz, int)
+        if self.target_khz < lower_bound:
+            return lower_bound, f"raised to policy minimum {lower_bound}"
+        if self.target_khz > upper_bound:
+            return upper_bound, f"clamped to policy maximum {upper_bound}"
+        return self.target_khz, None
+
+    def _policy_results(
+        self,
+        policy_targets: Dict[str, Dict[str, Any]],
+        temp_start: Optional[float],
+        temp_end: Optional[float],
+        elapsed_s: float,
+    ) -> Dict[str, BenchResult]:
+        """Calculate policy-local samples against each policy-local target."""
+        results: Dict[str, BenchResult] = {}
+        for policy_id, details in policy_targets.items():
+            members = set(details["member_cpus"])
+            samples = [
+                BenchSample(
+                    timestamp=sample.timestamp,
+                    frequencies_khz=[
+                        frequency
+                        for cpu_id, frequency in zip(sample.cpu_ids, sample.frequencies_khz)
+                        if cpu_id in members
+                    ],
+                    cpu_ids=[cpu_id for cpu_id in sample.cpu_ids if cpu_id in members],
+                    temperature_c=sample.temperature_c,
+                )
+                for sample in self._samples
+            ]
+            results[policy_id] = self._compute_result(
+                temp_start,
+                temp_end,
+                elapsed_s,
+                details["effective_target_khz"],
+                samples=samples,
+                policy_id=policy_id,
+            )
+        return results
 
     def _compute_result(
         self,
         temp_start: Optional[float],
         temp_end: Optional[float],
         elapsed_s: float,
+        target_khz: Optional[int] = None,
+        *,
+        samples: Optional[Sequence[BenchSample]] = None,
+        policy_id: Optional[str] = None,
     ) -> BenchResult:
         # Flatten all (cpu, sample) frequency values
         all_freqs: List[int] = []
-        cpu_ids: List[int] = self._samples[0].cpu_ids if self._samples else []
+        sample_set = list(samples) if samples is not None else self._samples
+        cpu_ids: List[int] = sample_set[0].cpu_ids if sample_set else []
+        resolved_target = target_khz if target_khz is not None else self.target_khz
+        if not isinstance(resolved_target, int):
+            raise ValueError("A numeric target is required to compute benchmark compliance")
 
-        for s in self._samples:
+        for s in sample_set:
             all_freqs.extend(s.frequencies_khz)
 
         if not all_freqs:
             # No samples at all - return zeroed result
             return BenchResult(
-                target_khz=self.target_khz,
+                target_khz=resolved_target,
                 duration_s=self.duration_s,
-                sample_count=0,
+                sample_count=len(sample_set),
                 cpu_ids=cpu_ids,
                 elapsed_s=elapsed_s,
                 temp_start_c=temp_start,
                 temp_end_c=temp_end,
+                policy_id=policy_id,
             )
 
         sorted_freqs = sorted(all_freqs)
-        compliance = sum(1 for f in all_freqs if f >= self.target_khz) / len(all_freqs)
+        compliance = sum(1 for f in all_freqs if f >= resolved_target) / len(all_freqs)
 
         thermal_gradient: Optional[float] = None
         if temp_start is not None and temp_end is not None:
             thermal_gradient = temp_end - temp_start
 
         return BenchResult(
-            target_khz=self.target_khz,
+            target_khz=resolved_target,
             duration_s=self.duration_s,
-            sample_count=len(self._samples),
+            sample_count=len(sample_set),
             cpu_ids=cpu_ids,
             all_samples_khz=all_freqs,
             min_khz=sorted_freqs[0],
@@ -265,4 +403,5 @@ class BenchmarkRunner:
             temp_end_c=temp_end,
             thermal_gradient_c=thermal_gradient,
             elapsed_s=elapsed_s,
+            policy_id=policy_id,
         )

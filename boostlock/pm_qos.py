@@ -11,7 +11,7 @@ import logging
 import os
 import struct
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from boostlock.sysfs import SysfsController, SysfsError, SysfsPermissionError
 
@@ -94,7 +94,12 @@ class PMQoSController:
         if latency_us > INT32_MAX:
             raise ValueError(f"target_latency_us exceeds maximum 32-bit integer ({INT32_MAX}), got {latency_us}")
 
-    def lock(self, target_latency_us: Optional[int] = None) -> bool:
+    def lock(
+        self,
+        target_latency_us: Optional[int] = None,
+        *,
+        allow_fallback: bool = True,
+    ) -> bool:
         """
         Acquire PM QoS lock by opening /dev/cpu_dma_latency and writing latency target.
         Falls back to cpuidle sysfs state disabling if device is unavailable.
@@ -118,6 +123,8 @@ class PMQoSController:
                     logger.warning(f"Failed to update PM QoS latency on open fd: {exc}")
             return True
 
+        fd: Optional[int] = None
+
         # Attempt to open device node
         try:
             flags = os.O_RDWR
@@ -126,7 +133,17 @@ class PMQoSController:
 
             fd = os.open(str(self.device_path), flags)
             payload = struct.pack("i", self._target_latency_us)
-            os.write(fd, payload)
+            try:
+                os.write(fd, payload)
+            except OSError as exc:
+                try:
+                    os.close(fd)
+                except OSError as close_exc:
+                    raise PMQoSError(
+                        f"Failed to write target latency to {self.device_path}: {exc}; "
+                        f"failed to close descriptor: {close_exc}"
+                    ) from exc
+                raise
 
             self._fd = fd
             self._is_locked = True
@@ -137,7 +154,7 @@ class PMQoSController:
             return True
 
         except PermissionError as exc:
-            if not self.enable_sysfs_fallback:
+            if not self.enable_sysfs_fallback or not allow_fallback:
                 raise PMQoSPermissionError(
                     f"Permission denied accessing {self.device_path}. Run with sudo/root privileges."
                 ) from exc
@@ -147,7 +164,7 @@ class PMQoSController:
             return self._lock_via_sysfs_fallback()
 
         except FileNotFoundError as exc:
-            if not self.enable_sysfs_fallback:
+            if not self.enable_sysfs_fallback or not allow_fallback:
                 raise PMQoSNotFoundError(
                     f"PM QoS device node not found at {self.device_path} and fallback is disabled."
                 ) from exc
@@ -158,7 +175,7 @@ class PMQoSController:
 
         except OSError as exc:
             if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
-                if not self.enable_sysfs_fallback:
+                if not self.enable_sysfs_fallback or not allow_fallback:
                     raise PMQoSPermissionError(
                         f"Permission error (errno {exc.errno}) accessing {self.device_path}."
                     ) from exc
@@ -167,7 +184,7 @@ class PMQoSController:
                 )
                 return self._lock_via_sysfs_fallback()
 
-            if not self.enable_sysfs_fallback:
+            if not self.enable_sysfs_fallback or not allow_fallback:
                 raise PMQoSError(
                     f"Failed to write target latency to {self.device_path}: {exc}"
                 ) from exc
@@ -176,6 +193,53 @@ class PMQoSController:
                 f"Error writing to {self.device_path} ({exc}), attempting cpuidle sysfs fallback."
             )
             return self._lock_via_sysfs_fallback()
+
+    def select_planned_route(self) -> Tuple[Optional[str], List[Path]]:
+        """Choose a preflightable DMA device route or a cpuidle fallback route."""
+        if self.device_path.exists():
+            return "device", [self.device_path.resolve()]
+        fallback_paths = self.discover_fallback_paths()
+        return ("cpuidle", fallback_paths) if fallback_paths else (None, [])
+
+    def open_device_for_preflight(self) -> Any:
+        """Open the DMA-latency device with write access without changing it."""
+        flags = os.O_RDWR
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        fd = os.open(str(self.device_path), flags)
+        return os.fdopen(fd, "rb+", buffering=0)
+
+    def discover_fallback_paths(self) -> List[Path]:
+        """Return cpuidle disable nodes eligible for a planned fallback action."""
+        paths: List[Path] = []
+        if not self.enable_sysfs_fallback:
+            return paths
+        for cpu in self.sysfs.get_online_cpus():
+            cpu_dir = self.sysfs._resolve_path(f"devices/system/cpu/cpu{cpu}/cpuidle")
+            if not cpu_dir.is_dir():
+                continue
+            for state_entry in sorted(cpu_dir.iterdir()):
+                if not state_entry.is_dir() or not state_entry.name.startswith("state"):
+                    continue
+                try:
+                    state_idx = int(state_entry.name[5:])
+                except ValueError:
+                    continue
+                if state_idx < self.min_fallback_state_index:
+                    continue
+                disable_path = state_entry / "disable"
+                if self.sysfs._read_path(disable_path) is not None:
+                    paths.append(disable_path.resolve())
+        return paths
+
+    def activate_planned_fallback(self, saved_states: Dict[Path, str]) -> None:
+        """Record a fallback already applied by the shared transaction executor."""
+        self._fallback_saved_states = {
+            str(path.resolve().relative_to(self.sysfs_root)): value
+            for path, value in saved_states.items()
+        }
+        self._is_locked = True
+        self._using_fallback = True
 
     def _lock_via_sysfs_fallback(self) -> bool:
         """Fallback mechanism: disable deep C-states via sysfs cpuidle nodes."""
@@ -221,11 +285,23 @@ class PMQoSController:
 
     def unlock(self) -> None:
         """Release PM QoS lock and restore any modified cpuidle states."""
+        self._release(strict=False)
+
+    def release_strict(self) -> None:
+        """Release a transaction-owned PM QoS descriptor without hiding close errors."""
+        self._release(strict=True)
+
+    def _release(self, strict: bool) -> None:
+        """Release PM QoS state, optionally preserving a descriptor close failure."""
+        close_error: Optional[OSError] = None
         if self._fd is not None:
             try:
                 os.close(self._fd)
             except OSError as exc:
-                logger.debug(f"Error closing PM QoS fd {self._fd}: {exc}")
+                if strict:
+                    close_error = exc
+                else:
+                    logger.debug(f"Error closing PM QoS fd {self._fd}: {exc}")
             finally:
                 self._fd = None
 
@@ -240,6 +316,8 @@ class PMQoSController:
 
         self._is_locked = False
         logger.info("PM QoS DMA latency lock released.")
+        if close_error is not None:
+            raise close_error
 
     def release(self) -> None:
         """Alias for unlock()."""

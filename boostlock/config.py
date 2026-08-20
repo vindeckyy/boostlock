@@ -8,7 +8,7 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional, Union
 
 
 class ConfigValidationError(ValueError):
@@ -20,7 +20,8 @@ class ConfigValidationError(ValueError):
 class BoostLockConfig:
     """Configuration options for BoostLock daemon and operations."""
 
-    target_frequency_khz: int = 4000000  # 4.0 GHz target frequency
+    target_frequency_khz: Union[int, Literal["auto"]] = 4000000
+    # An explicit frequency in kHz, or automatic per-policy targeting.
     min_pulse_duty_pct: float = 5.0      # Minimum pulse stimulation duty cycle (%)
     max_pulse_duty_pct: float = 50.0     # Maximum pulse stimulation duty cycle (%)
     duty_step_pct: float = 2.0           # Step size for duty cycle adjustment (%)
@@ -54,9 +55,18 @@ class BoostLockConfig:
 
     def validate(self) -> None:
         """Validate configuration settings and raise ConfigValidationError on invalid values."""
-        if self.target_frequency_khz <= 0 or self.target_frequency_khz > 10_000_000:
+        target = self.target_frequency_khz
+        if target == "auto":
+            pass
+        elif (
+            not isinstance(target, int)
+            or isinstance(target, bool)
+            or target <= 0
+            or target > 10_000_000
+        ):
             raise ConfigValidationError(
-                f"target_frequency_khz must be between 1 and 10000000 kHz, got {self.target_frequency_khz}"
+                "target_frequency_khz must be 'auto' or an integer between 1 and "
+                f"10000000 kHz, got {target}"
             )
 
         if not (50.0 <= self.thermal_limit_c <= 115.0):

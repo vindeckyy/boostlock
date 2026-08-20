@@ -34,6 +34,19 @@ SYSTEMD_SERVICE_SRC = Path(__file__).parent / "data" / "boostlock.service"
 SYSTEMD_SERVICE_DST = Path("/etc/systemd/system/boostlock.service")
 
 
+def _parse_target_mhz(value: str) -> str | float:
+    """Parse an explicit MHz target or the automatic policy mode."""
+    if value.lower() == "auto":
+        return "auto"
+    try:
+        target_mhz = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("target must be a positive MHz value or 'auto'") from exc
+    if target_mhz <= 0:
+        raise argparse.ArgumentTypeError("target must be a positive MHz value or 'auto'")
+    return target_mhz
+
+
 # ---------------------------------------------------------------------------
 # Command helpers
 # ---------------------------------------------------------------------------
@@ -110,8 +123,11 @@ def cmd_start(args: argparse.Namespace, socket_path: Path, pid_path: Path) -> in
     # Foreground mode - run daemon directly
     try:
         cfg = BoostLockConfig()
-        if args.target:
-            cfg.target_frequency_khz = int(args.target * 1_000)  # MHz -> kHz
+        target = args.target if args.target is not None else "auto"
+        if target == "auto":
+            cfg.target_frequency_khz = "auto"
+        else:
+            cfg.target_frequency_khz = int(target * 1_000)  # MHz -> kHz
         if args.duty:
             # Map CLI --duty percent to config's min pulse duty (keeps max at default 50 unless duty higher)
             try:
@@ -201,7 +217,11 @@ def _render_status_table(data: Dict[str, Any], watch: bool = False) -> None:
     lines.append(_row("PM QoS latency lock:", pm_qos))
 
     target_khz = data.get("target_freq_khz", 0)
-    lines.append(_row("Target:", f"{target_khz / 1_000_000:.3f} GHz"))
+    if isinstance(target_khz, (int, float)) and not isinstance(target_khz, bool):
+        target_text = f"{target_khz / 1_000_000:.3f} GHz"
+    else:
+        target_text = "automatic per-policy"
+    lines.append(_row("Target:", target_text))
 
     temp = data.get("temperature_c")
     if temp is not None:
@@ -246,12 +266,15 @@ def _render_status_table(data: Dict[str, Any], watch: bool = False) -> None:
 def cmd_bench(args: argparse.Namespace) -> int:
     """Run boost clock stability benchmark."""
     try:
-        target_mhz = getattr(args, "target", 4000) or 4000
-        target_khz = int(target_mhz) * 1_000
+        target_mhz = getattr(args, "target", "auto")
+        if target_mhz is None:
+            target_mhz = "auto"
+        target_khz = "auto" if target_mhz == "auto" else int(target_mhz) * 1_000
         duration = getattr(args, "duration", 10) or 10
         sample_hz = getattr(args, "sample_hz", 20) or 20
 
-        print(f"[boostlock] Running benchmark: target={target_mhz} MHz, "
+        target_label = "automatic per-policy" if target_mhz == "auto" else f"{target_mhz} MHz"
+        print(f"[boostlock] Running benchmark: target={target_label}, "
               f"duration={duration}s, sample_rate={sample_hz}Hz")
         print("[boostlock] Sampling for the full duration.")
 
@@ -402,7 +425,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_start.add_argument(
         "--target",
-        type=float,
+        type=_parse_target_mhz,
         metavar="MHZ",
         help="Target boost frequency in MHz (default: auto-detect from CPU)",
     )
@@ -458,10 +481,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_bench.add_argument(
         "--target",
-        type=int,
-        default=4000,
+        type=_parse_target_mhz,
+        default="auto",
         metavar="MHZ",
-        help="Target boost frequency in MHz (default: %(default)s)",
+        help="Target boost frequency in MHz or auto (default: %(default)s)",
     )
     p_bench.add_argument(
         "--sample-hz",

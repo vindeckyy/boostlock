@@ -191,7 +191,7 @@ cpu cores : invalid_cores
         self.assertEqual(info.logical_cpus, 12)
         self.assertEqual(info.physical_cores, 6)
         self.assertEqual(info.base_freq_mhz, 3000.0)
-        self.assertEqual(info.max_boost_mhz, 4000.0)
+        self.assertEqual(info.max_boost_mhz, 3000.0)
         self.assertEqual(info.min_freq_mhz, 1400.0)
         self.assertEqual(info.scaling_driver, ScalingDriver.ACPI_CPUFREQ)
         self.assertTrue(info.has_cpb)
@@ -213,25 +213,23 @@ cpu cores : invalid_cores
         self.assertEqual(info.logical_cpus, 12)
         self.assertEqual(info.physical_cores, 6)
         self.assertEqual(info.base_freq_mhz, 2600.0)
-        self.assertEqual(info.max_boost_mhz, 5000.0)
+        self.assertEqual(info.max_boost_mhz, 2600.0)
         self.assertEqual(info.scaling_driver, ScalingDriver.INTEL_PSTATE)
         self.assertTrue(info.has_epp)
         self.assertTrue(info.has_epb)
 
     def test_lookup_boost_frequency(self):
-        # Known model lookup
-        self.assertEqual(lookup_boost_frequency("AMD Ryzen 5 4600H with Radeon Graphics", 3000.0, {"cpb"}), 4000.0)
-        self.assertEqual(lookup_boost_frequency("AMD Ryzen 7 4800H with Radeon Graphics", 2900.0, {"cpb"}), 4200.0)
-        self.assertEqual(lookup_boost_frequency("AMD Ryzen 7 5800H", 3200.0, {"cpb"}), 4400.0)
-        self.assertEqual(lookup_boost_frequency("Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz", 2600.0, {"ida"}), 5000.0)
+        # CPU metadata does not imply a boost frequency.
+        self.assertEqual(lookup_boost_frequency("AMD Ryzen 5 4600H with Radeon Graphics", 3000.0, {"cpb"}), 3000.0)
+        self.assertEqual(lookup_boost_frequency("AMD Ryzen 7 4800H with Radeon Graphics", 2900.0, {"cpb"}), 2900.0)
+        self.assertEqual(lookup_boost_frequency("AMD Ryzen 7 5800H", 3200.0, {"cpb"}), 3200.0)
+        self.assertEqual(lookup_boost_frequency("Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz", 2600.0, {"ida"}), 2600.0)
 
-        # Fallback heuristic when model is unknown
         fallback = lookup_boost_frequency("Unknown Custom CPU @ 2.50GHz", 2500.0, set())
         self.assertEqual(fallback, 2500.0)
 
-        # Fallback heuristic with cpb flag
         fallback_boost = lookup_boost_frequency("Unknown Custom CPU", 2000.0, {"cpb"})
-        self.assertAlmostEqual(fallback_boost, 2600.0)
+        self.assertEqual(fallback_boost, 2000.0)
 
     def test_lookup_boost_frequency_from_sysfs(self):
         # Create scaling_boost_frequencies file in sysfs

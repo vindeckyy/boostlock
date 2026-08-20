@@ -27,7 +27,7 @@ from boostlock.pm_qos import PMQoSController
 from boostlock.protocol import Command, Request, Response
 from boostlock.pulse_engine import EngineState, PulseEngine
 from boostlock.state import StateSnapshotManager
-from boostlock.sysfs import SysfsController
+from boostlock.sysfs import PolicyApplyAction, PolicyApplyPlan, SysfsController, SysfsError
 from boostlock.thermal import ThermalGuard, ThermalReading, ThermalState
 
 logger = logging.getLogger(__name__)
@@ -213,6 +213,7 @@ class BoostLockDaemon:
         self._is_locked_boost = False
         self._stop_event = threading.Event()
         self._start_time: Optional[float] = None
+        self._pm_qos_skip_reason: Optional[str] = None
 
         # Subsystems
         self.sysfs = SysfsController(sysfs_root=self.sysfs_root)
@@ -279,17 +280,15 @@ class BoostLockDaemon:
             # 1. PID file
             self.pid_manager.acquire()
 
-            # 2. Capture state snapshot
-            self.state_manager.create_snapshot()
+            # 2. Build the exact reversible policy change set and snapshot it.
+            policy_plan = self._build_policy_apply_plan()
+            self.state_manager.create_snapshot(policy_plan.actions)
 
             # 3. Register signal handlers
             self._register_signals()
 
-            # 4. Sysfs governor and boost optimization
-            self._apply_sysfs_boost_profile()
-
-            # 5. Lock PM QoS
-            self.pm_qos.lock(self.config.dma_latency_us)
+            # 4. Apply the full cpufreq and PM QoS transaction.
+            self._apply_startup_policy_transaction(policy_plan)
 
             # 6. ThermalGuard
             self.thermal_guard.start()
@@ -308,6 +307,17 @@ class BoostLockDaemon:
 
             logger.info("BoostLock daemon started successfully")
 
+        except SysfsError as exc:
+            logger.exception(f"Failed to start BoostLock daemon: {exc}")
+            rollback_errors = self._emergency_rollback(
+                exc,
+                final_state=DaemonState.STOPPED,
+                restore_state=False,
+            )
+            message = f"Daemon startup failed: {exc}"
+            if rollback_errors:
+                message += f"; rollback failed: {'; '.join(rollback_errors)}"
+            raise DaemonError(message) from exc
         except Exception as exc:
             logger.exception(f"Failed to start BoostLock daemon: {exc}")
             self._emergency_rollback(exc)
@@ -388,8 +398,7 @@ class BoostLockDaemon:
         with self._lock:
             if self._is_locked_boost:
                 return
-            self._apply_sysfs_boost_profile()
-            self.pm_qos.lock(self.config.dma_latency_us)
+            self._apply_startup_policy_transaction()
             self.pulse_engine.start()
             self._is_locked_boost = True
             if self._state != DaemonState.THROTTLED:
@@ -483,6 +492,7 @@ class BoostLockDaemon:
                 temp_c = thermal_status.get("current_temp_c")
         except Exception:
             temp_c = None
+        policies, text_status = self._policy_status(is_locked)
         return {
             "state": state_val,
             "boost_state": state_val,
@@ -500,9 +510,12 @@ class BoostLockDaemon:
                 "is_locked": self.pm_qos.is_locked,
                 "target_latency_us": self.pm_qos.target_latency_us,
                 "using_fallback": self.pm_qos.using_fallback,
+                "skipped_reason": self._pm_qos_skip_reason,
             },
             "pm_qos_active": self.pm_qos.is_locked,
             "pulse_engine": pulse_status,
+            "policies": policies,
+            "text_status": text_status,
             "online_cpus_count": len(cpus),
             "cpu_states": {str(k): v for k, v in cpu_states.items()},
             "per_cpu": per_cpu,
@@ -586,7 +599,9 @@ class BoostLockDaemon:
 
             elif cmd == Command.RECONFIGURE:
                 updated = self.reconfigure(req.args)
-                return Response.ok(updated.to_dict(), request_id=req.request_id)
+                result = updated.to_dict()
+                result["policy_targets"] = self.resolve_policy_targets()
+                return Response.ok(result, request_id=req.request_id)
 
             elif cmd == Command.METRICS:
                 return Response.ok(self.get_metrics(), request_id=req.request_id)
@@ -643,36 +658,224 @@ class BoostLockDaemon:
             os.dup2(devnull_w.fileno(), 1)
             os.dup2(devnull_w.fileno(), 2)
 
+    def resolve_policy_targets(self) -> Dict[str, Dict[str, int]]:
+        """Return each policy's independently clamped target frequency."""
+        policies, _ = self._policy_status(self._is_locked_boost)
+        return {
+            policy_id: {"effective_target_khz": details["effective_target_khz"]}
+            for policy_id, details in policies.items()
+            if details["effective_target_khz"] is not None
+        }
+
+    def _policy_status(self, is_locked: bool) -> tuple[Dict[str, Dict[str, Any]], str]:
+        """Build policy-level status without treating one unavailable node as fatal."""
+        try:
+            policies = self.sysfs.discover_cpufreq_policies()
+            plan = self._build_policy_apply_plan()
+        except Exception as exc:
+            return {}, f"Policy status unavailable: {exc}"
+
+        actions_by_policy: Dict[str, Dict[str, str]] = {}
+        for action in plan.actions:
+            if action.policy_id == "pm_qos":
+                continue
+            actions_by_policy.setdefault(action.policy_id, {})[action.control] = action.value
+
+        requested_target = self.config.target_frequency_khz
+        result: Dict[str, Dict[str, Any]] = {}
+        text_lines: List[str] = []
+        for policy in policies:
+            planned = actions_by_policy.get(policy.identifier, {})
+            effective = self._policy_effective_target(planned)
+            skipped = dict(policy.skipped_controls)
+            skipped.update(plan.skipped_controls.get(policy.identifier, {}))
+            clamp_reason = self._policy_clamp_reason(policy, requested_target, effective)
+            applied = dict(planned) if is_locked else {}
+            result[policy.identifier] = {
+                "identifier": policy.identifier,
+                "member_cpus": list(policy.cpus),
+                "driver": policy.driver,
+                "requested_target": requested_target,
+                "effective_target_khz": effective,
+                "clamp_reason": clamp_reason,
+                "applied_controls": applied,
+                "skipped_controls": skipped,
+            }
+            controls = ", ".join(sorted(applied)) or "none"
+            skipped_text = ", ".join(sorted(skipped)) or "none"
+            target_text = str(effective) if effective is not None else "unavailable"
+            text_lines.append(
+                f"{policy.identifier} cpus={policy.cpus} driver={policy.driver or 'unknown'} "
+                f"requested={requested_target} effective={target_text} "
+                f"clamp={clamp_reason or 'none'} applied={controls} skipped={skipped_text}"
+            )
+        return result, "\n".join(text_lines)
+
+    @staticmethod
+    def _policy_effective_target(planned_controls: Dict[str, str]) -> Optional[int]:
+        """Read the requested policy target from its planned min-frequency action."""
+        target = planned_controls.get("active_min_frequency")
+        try:
+            return int(target) if target is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _policy_clamp_reason(
+        policy: Any,
+        requested_target: Any,
+        effective_target: Optional[int],
+    ) -> Optional[str]:
+        """Explain how one policy converted the configured request into a target."""
+        if effective_target is None:
+            return "policy frequency bounds unavailable"
+        if requested_target == "auto":
+            return "automatic policy maximum"
+        if not isinstance(requested_target, int):
+            return "invalid requested target"
+
+        lower_bounds = [
+            value
+            for value in (policy.hardware_min_khz, policy.active_min_khz)
+            if isinstance(value, int) and value > 0
+        ]
+        upper_bounds = [
+            value
+            for value in (policy.hardware_max_khz, policy.active_max_khz)
+            if isinstance(value, int) and value > 0
+        ]
+        if not lower_bounds or not upper_bounds:
+            return "policy frequency bounds unavailable"
+        lower_bound = max(lower_bounds)
+        upper_bound = min(upper_bounds)
+        if requested_target < lower_bound:
+            return f"raised to policy minimum {lower_bound}"
+        if requested_target > upper_bound:
+            return f"clamped to policy maximum {upper_bound}"
+        return None
+
     def _apply_sysfs_boost_profile(self) -> None:
-        """Configure kernel cpufreq governors, frequencies, boost flags, and EPP."""
-        online_cpus = self.sysfs.get_online_cpus()
+        """Apply only the reversible cpufreq portion of the policy plan."""
+        self.sysfs.execute_policy_apply_plan(self._build_policy_apply_plan())
 
-        # Set scaling governor to performance
-        self.sysfs.set_scaling_governor(self.config.governor, cpus=online_cpus)
+    def _apply_startup_policy_transaction(
+        self,
+        plan: Optional[PolicyApplyPlan] = None,
+    ) -> None:
+        """Apply cpufreq and one optional PM QoS route as one transaction."""
+        plan = plan or self._build_policy_apply_plan()
+        route, route_paths = self.pm_qos.select_planned_route()
+        fallback_snapshots: Dict[Path, str] = {}
 
-        # Set boost and CPB
-        self.sysfs.enable_all_boost()
-
-        # Set scaling min frequency - clamp to max available to avoid EINVAL when target (4.0 GHz boost) exceeds scaling_max (3.0 GHz base)
-        try:
-            max_khz = self.sysfs.get_scaling_max_freq(online_cpus[0]) if online_cpus else None
-        except Exception:
-            max_khz = None
-        # Use target if within available range, else use max base freq
-        try:
-            available = self.sysfs.get_available_frequencies(online_cpus[0]) if online_cpus else []
-        except Exception:
-            available = []
-        if max_khz and self.config.target_frequency_khz > max_khz:
-            # Check if target is a valid boost freq (via boost flag), else clamp to max
-            # For acpi-cpufreq on this Ryzen, boost is via cpb flag, min should be max base
-            min_freq_to_set = max_khz
+        if route == "device":
+            plan.actions.append(
+                PolicyApplyAction(
+                    "pm_qos",
+                    "device",
+                    self.dma_latency_path.resolve(),
+                    str(self.config.dma_latency_us),
+                    "release",
+                )
+            )
+            self._pm_qos_skip_reason = None
+        elif route == "cpuidle":
+            for path in route_paths:
+                original_value = self.sysfs._read_path(path)
+                if original_value is None:
+                    continue
+                resolved = path.resolve()
+                fallback_snapshots[resolved] = original_value
+                plan.actions.append(
+                    PolicyApplyAction(
+                        "pm_qos",
+                        "cpuidle",
+                        resolved,
+                        "1",
+                        original_value,
+                    )
+                )
+            route = "cpuidle" if fallback_snapshots else None
+            self._pm_qos_skip_reason = None if route else "no usable PM QoS route"
         else:
-            min_freq_to_set = self.config.target_frequency_khz
-        self.sysfs.set_scaling_min_freq(min_freq_to_set, cpus=online_cpus)
+            self._pm_qos_skip_reason = "no usable PM QoS route"
 
-        # Set Energy Performance Preference
-        self.sysfs.set_energy_performance_preference(self.config.epp, cpus=online_cpus)
+        plan.preflight_paths = self._unique_plan_paths(
+            [action.path for action in plan.actions]
+        )
+        self.sysfs.execute_policy_apply_plan(
+            plan,
+            open_for_write=self._transaction_opener(route),
+            writer=self._transaction_writer(route, fallback_snapshots),
+        )
+        if route == "cpuidle":
+            self.pm_qos.activate_planned_fallback(fallback_snapshots)
+
+    def _build_policy_apply_plan(self) -> PolicyApplyPlan:
+        """Build the policy-owned cpufreq part of a daemon transaction."""
+        target = self.config.target_frequency_khz
+        target_khz = None if target == "auto" else int(target)
+        return self.sysfs.build_policy_apply_plan(
+            target_khz=target_khz,
+            governor=self.config.governor,
+            boost=True,
+            cpb=True,
+            energy_performance_preference=self.config.epp,
+        )
+
+    def _transaction_opener(self, route: Optional[str]):
+        """Return a write-open check that understands the DMA-latency descriptor."""
+        device_path = self.dma_latency_path.resolve()
+
+        def open_for_write(path: Path) -> Any:
+            if route == "device" and path.resolve() == device_path:
+                return self.pm_qos.open_device_for_preflight()
+            return self.sysfs._open_path_for_write(path)
+
+        return open_for_write
+
+    def _transaction_writer(
+        self,
+        route: Optional[str],
+        fallback_snapshots: Dict[Path, str],
+    ):
+        """Write plan actions and compensate the PM QoS descriptor when required."""
+        device_path = self.dma_latency_path.resolve()
+        fallback_paths = set(fallback_snapshots)
+
+        def write(path: Path, value: str) -> None:
+            resolved = path.resolve()
+            if route == "device" and resolved == device_path:
+                if value == "release":
+                    self.pm_qos.release_strict()
+                    return
+                try:
+                    self.pm_qos.lock(int(value), allow_fallback=False)
+                except Exception as exc:
+                    try:
+                        self.pm_qos.release_strict()
+                    except Exception as rollback_exc:
+                        raise SysfsError(f"{exc}; rollback failed: {rollback_exc}") from exc
+                    raise
+                return
+            if route == "cpuidle" and resolved in fallback_paths:
+                subpath = str(resolved.relative_to(self.sysfs_root))
+                self.pm_qos.sysfs._write_file(subpath, value)
+                return
+            self.sysfs._write_absolute_path(resolved, value)
+
+        return write
+
+    @staticmethod
+    def _unique_plan_paths(paths: Sequence[Path]) -> List[Path]:
+        """Deduplicate plan paths after resolving any aliases."""
+        unique: List[Path] = []
+        seen: set[Path] = set()
+        for path in paths:
+            resolved = path.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                unique.append(resolved)
+        return unique
 
     def _on_thermal_warning(self, reading: ThermalReading) -> None:
         """Callback invoked when temperature enters warning zone."""
@@ -708,35 +911,34 @@ class BoostLockDaemon:
                 except Exception as e:
                     logger.error(f"Error resuming pulse engine on recovery: {e}")
 
-    def _emergency_rollback(self, exc: Exception) -> None:
+    def _emergency_rollback(
+        self,
+        exc: Exception,
+        final_state: DaemonState = DaemonState.ERROR,
+        restore_state: bool = True,
+    ) -> List[str]:
         """Perform emergency cleanup and state restoration on startup failure."""
-        with self._lock:
-            self._state = DaemonState.ERROR
-        try:
-            self.pulse_engine.stop()
-        except Exception:
-            pass
-        try:
-            self.thermal_guard.stop()
-        except Exception:
-            pass
-        try:
-            self.pm_qos.unlock()
-        except Exception:
-            pass
-        try:
-            self.state_manager.restore()
-        except Exception:
-            pass
-        try:
-            self.ipc_server.stop()
-        except Exception:
-            pass
-        try:
-            self.pid_manager.release()
-        except Exception:
-            pass
+        rollback_errors: List[str] = []
+        cleanups = [
+            ("pulse engine", self.pulse_engine.stop),
+            ("thermal guard", self.thermal_guard.stop),
+            ("PM QoS", self.pm_qos.unlock),
+            ("IPC server", self.ipc_server.stop),
+            ("PID lock", self.pid_manager.release),
+        ]
+        if restore_state:
+            cleanups.insert(3, ("state restore", self.state_manager.restore))
+        for name, cleanup in cleanups:
+            try:
+                cleanup()
+            except Exception as rollback_exc:
+                rollback_errors.append(f"{name}: {rollback_exc}")
         self._unregister_signals()
+        with self._lock:
+            self._state = final_state
+            self._is_locked_boost = False
+            self._stop_event.set()
+        return rollback_errors
 
     def _signal_handler(self, signum: int, frame: Any) -> None:
         """Signal handler for graceful shutdown on SIGINT/SIGTERM."""

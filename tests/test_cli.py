@@ -64,6 +64,12 @@ class TestBuildParser:
         assert args.duty == 15.0
         assert args.max_temp == 85.0
 
+    @pytest.mark.parametrize("value", ["zero", "0"])
+    def test_target_rejects_invalid_or_zero_values(self, value):
+        p = build_parser()
+        with pytest.raises(SystemExit):
+            p.parse_args(["start", "--target", value])
+
     def test_stop_subcommand(self):
         p = build_parser()
         args = p.parse_args(["stop"])
@@ -87,7 +93,7 @@ class TestBuildParser:
         args = p.parse_args(["bench"])
         assert args.command == "bench"
         assert args.duration == 10.0
-        assert args.target == 4000
+        assert args.target == "auto"
         assert args.sample_hz == 20.0
         assert args.output is None
 
@@ -358,6 +364,10 @@ class TestRenderStatusTable:
         captured = capsys.readouterr()
         assert "schedutil" in captured.out
 
+    def test_renders_automatic_target(self, capsys):
+        _render_status_table({"target_freq_khz": "auto"})
+        assert "automatic per-policy" in capsys.readouterr().out
+
     def test_watch_mode_completes(self, capsys):
         data = {"boost_state": "running", "governor": "performance",
                 "pm_qos_active": True, "target_freq_khz": 4_000_000}
@@ -414,7 +424,7 @@ class TestCmdBench:
         with patch("boostlock.cli.BenchmarkRunner", return_value=mock_runner) as MockRunner:
             cmd_bench(args)
         call_kwargs = MockRunner.call_args[1]
-        assert call_kwargs["target_khz"] == 4000 * 1000  # 4000 MHz default -> kHz
+        assert call_kwargs["target_khz"] == "auto"
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +497,7 @@ class TestCmdService:
             rc = cmd_service(args)
         assert rc == 0
         assert dst.exists()
+        assert dst.read_text() == src.read_text()
 
     def test_service_uninstall_calls_systemctl(self, tmp_path, capsys):
         dst = tmp_path / "boostlock.service"
@@ -564,6 +575,16 @@ class TestCmdStart:
         assert rc == 0
         config = daemon_class.call_args.kwargs["config"]
         assert config.target_frequency_khz == 3_900_000
+
+    def test_start_without_target_uses_automatic_policy_mode(self, tmp_path):
+        args = argparse.Namespace(daemon=False, target=None, duty=None, max_temp=None)
+        mock_daemon = MagicMock()
+        with patch("boostlock.cli.BoostLockDaemon", return_value=mock_daemon) as daemon_class:
+            rc = cmd_start(args, tmp_path / "test.sock", tmp_path / "test.pid")
+
+        assert rc == 0
+        config = daemon_class.call_args.kwargs["config"]
+        assert config.target_frequency_khz == "auto"
 
     def test_start_foreground_keyboard_interrupt(self, tmp_path, capsys):
         args = argparse.Namespace(daemon=False, target=None, duty=None, max_temp=None)

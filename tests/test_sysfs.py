@@ -202,6 +202,11 @@ class TestSysfs(unittest.TestCase):
             val = self.ctrl.get_scaling_governor(0)
             self.assertIsNone(val)
 
+    def test_absolute_path_oserror_on_read(self):
+        path = self.cpu_dir / "cpu0" / "cpufreq" / "scaling_governor"
+        with patch("pathlib.Path.read_text", side_effect=OSError("I/O error")):
+            self.assertIsNone(self.ctrl._read_path(path))
+
     def test_sysfs_not_found_on_mandatory_write(self):
         with self.assertRaises(SysfsNotFoundError):
             self.ctrl._write_file("devices/system/cpu/cpu0/cpufreq/nonexistent_file", "1", optional=False)

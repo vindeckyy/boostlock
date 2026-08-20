@@ -7,6 +7,7 @@ from boostlock.engine import (
     AffinityError,
     EngineError,
     EngineMetrics,
+    PolicyPulseMetrics,
     EngineState,
     EngineStateError,
     ExternalLoadMonitor,
@@ -35,5 +36,6 @@ __all__ = [
     "PulseMetrics",
     "PulseWorker",
     "EngineMetrics",
+    "PolicyPulseMetrics",
     "PulseEngine",
 ]

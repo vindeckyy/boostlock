@@ -38,6 +38,11 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.target_frequency_khz, 3800000)
         self.assertEqual(cfg.thermal_limit_c, 90.0)
 
+    def test_automatic_target_is_valid(self):
+        cfg = BoostLockConfig(target_frequency_khz="auto")
+        cfg.validate()
+        self.assertEqual(cfg.to_dict()["target_frequency_khz"], "auto")
+
     def test_invalid_target_frequency(self):
         with self.assertRaises(ConfigValidationError):
             BoostLockConfig(target_frequency_khz=0).validate()

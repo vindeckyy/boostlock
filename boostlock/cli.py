@@ -64,7 +64,10 @@ def _send_command(client, cmd: str, **kwargs) -> Optional[Dict[str, Any]]:
     """Send a command and return the parsed response body, or None on error."""
     try:
         req = Request(command=Command.from_str(cmd) if isinstance(cmd, str) else cmd, args=kwargs)
-        resp = client.send(req)
+        # Use longer timeout for STATUS which can be slow under high CPU load (pulse workers holding GIL)
+        # PING is fast, STATUS needs 10s, others 5s
+        timeout = 10.0 if cmd.upper() == "STATUS" else None
+        resp = client.send(req, timeout=timeout) if timeout else client.send(req)
         if resp is None:
             print(f"[boostlock] No response from daemon for command '{cmd}'",
                   file=sys.stderr)

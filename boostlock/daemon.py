@@ -438,7 +438,21 @@ class BoostLockDaemon:
         except Exception:
             thermal_status = {}
         try:
-            pulse_status = self.pulse_engine.get_status()
+            # Use lightweight pulse status to avoid GIL contention and large JSON (>4096) that causes IPC fragmentation
+            # Full worker_metrics are available via METRICS command, STATUS should be fast and small
+            pm = self.pulse_engine.get_metrics()
+            pulse_status = {
+                "state": pm.state.value if hasattr(pm.state, "value") else str(pm.state),
+                "overall_duty_cycle_pct": pm.overall_duty_cycle_pct,
+                "target_frequency_khz": pm.target_frequency_khz,
+                "average_frequency_khz": pm.average_frequency_khz,
+                "active_workers": pm.active_workers,
+                "total_pulses": pm.total_pulses,
+                "thermal_clamped": pm.thermal_clamped,
+                "external_load_pct": pm.external_load_pct,
+                "targeting_mode": pm.targeting_mode.value if hasattr(pm.targeting_mode, "value") else str(pm.targeting_mode),
+                "waveform": pm.waveform.value if hasattr(pm.waveform, "value") else str(pm.waveform),
+            }
         except Exception:
             pulse_status = {}
         # per_cpu flat mapping for CLI

@@ -478,9 +478,7 @@ class EngineMetrics:
 
 
 class PulseEngine:
-    """
-    Manage pulse workers and their controller thread.
-    """
+    """Manage pulse workers and their controller thread."""
 
     def __init__(
         self,

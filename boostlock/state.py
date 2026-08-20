@@ -1,7 +1,7 @@
 """
-System state snapshot, atomic persistence, signal handlers, and crash rollback manager.
+CPU state snapshots and restoration helpers.
 
-The manager records CPU settings and restores them during normal cleanup.
+The manager saves governor, frequency, EPP or EPB, boost, and cpuidle values.
 """
 
 from __future__ import annotations

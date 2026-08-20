@@ -1,5 +1,5 @@
 """
-Compatibility imports for boostlock.pulse_engine.
+Compatibility imports for `boostlock.pulse_engine`.
 """
 
 from boostlock.engine import (

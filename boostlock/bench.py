@@ -1,9 +1,7 @@
 """
-boostlock/bench.py - Boost clock stability benchmark suite.
+CPU frequency benchmark helpers.
 
-Samples per-core frequencies at a configurable sample rate, computes
-statistical metrics (p50/p90/p99, mean, min, max, compliance ratio),
-and produces a formatted stability report.
+Samples CPU frequencies and formats a report with percentiles and compliance.
 """
 
 from __future__ import annotations

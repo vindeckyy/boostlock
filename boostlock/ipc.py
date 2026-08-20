@@ -1,5 +1,5 @@
 """
-Unix Domain Socket IPC Server & Client for BoostLock (FEAT-05).
+Unix socket client and server for BoostLock.
 """
 
 from __future__ import annotations

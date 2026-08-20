@@ -1,14 +1,5 @@
 """
-boostlock/cli.py - Command-line interface for boostlock.
-
-Subcommands
------------
-  start   - Start the boost-lock daemon or foreground engine
-  stop    - Stop the running daemon
-  status  - Display per-core frequency, governor, temperatures
-  bench   - Run a frequency-stability benchmark
-  restore - Emergency state restoration from the last snapshot
-  service - Manage the systemd unit (install / uninstall / status)
+Command-line interface for BoostLock.
 """
 
 from __future__ import annotations
@@ -31,7 +22,7 @@ from .protocol import Command, Request
 from .state import StateSnapshotManager
 
 # ---------------------------------------------------------------------------
-# Public default paths (may be overridden via env-vars or tests)
+# Default paths, overridable for tests and custom deployments.
 # ---------------------------------------------------------------------------
 DEFAULT_SOCKET_PATH = Path(
     os.environ.get("BOOSTLOCK_SOCKET", "/var/run/boostlock/boostlock.sock")
@@ -44,7 +35,7 @@ SYSTEMD_SERVICE_DST = Path("/etc/systemd/system/boostlock.service")
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Command helpers
 # ---------------------------------------------------------------------------
 
 def _connect_client(socket_path: Path):
@@ -113,7 +104,7 @@ def cmd_start(args: argparse.Namespace, socket_path: Path, pid_path: Path) -> in
     try:
         cfg = BoostLockConfig()
         if args.target:
-            cfg.target_freq_khz = int(args.target * 1_000)  # MHz -> kHz
+            cfg.target_frequency_khz = int(args.target * 1_000)  # MHz -> kHz
         if args.duty:
             # Map CLI --duty percent to config's min pulse duty (keeps max at default 50 unless duty higher)
             try:
@@ -138,7 +129,7 @@ def cmd_start(args: argparse.Namespace, socket_path: Path, pid_path: Path) -> in
         daemon.run()
         return 0
     except KeyboardInterrupt:
-        print("\n[boostlock] Interrupted - restoring original state...")
+        print("\n[boostlock] Interrupted. Restoring original state.")
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"[boostlock] Fatal error: {exc}", file=sys.stderr)
@@ -255,7 +246,7 @@ def cmd_bench(args: argparse.Namespace) -> int:
 
         print(f"[boostlock] Running benchmark: target={target_mhz} MHz, "
               f"duration={duration}s, sample_rate={sample_hz}Hz")
-        print("[boostlock] Sampling... (this will take the full duration)")
+        print("[boostlock] Sampling for the full duration.")
 
         runner = BenchmarkRunner(
             target_khz=target_khz,
@@ -300,17 +291,17 @@ def cmd_restore(args: argparse.Namespace) -> int:
         if is_mocked_load:
             snap = mgr.load()  # type: ignore[attr-defined]
             if snap is None:
-                print("[boostlock] No snapshot found - nothing to restore.")
+                print("[boostlock] No snapshot found. Nothing to restore.")
                 return 0
-            print("[boostlock] Restoring original system state from snapshot...")
+            print("[boostlock] Restoring original system state from snapshot.")
             mgr.restore(snap)
             print("[boostlock] Restore complete.")
             return 0
         # Real manager: check file existence
         if not mgr.snapshot_file.exists():
-            print("[boostlock] No snapshot found - nothing to restore.")
+            print("[boostlock] No snapshot found. Nothing to restore.")
             return 0
-        print("[boostlock] Restoring original system state from snapshot...")
+        print("[boostlock] Restoring original system state from snapshot.")
         mgr.restore()
         print("[boostlock] Restore complete.")
         return 0
@@ -360,7 +351,7 @@ def cmd_service(args: argparse.Namespace) -> int:
             return 2
 
     except FileNotFoundError:
-        print("[boostlock] systemctl not found - systemd not available on this system.",
+        print("[boostlock] systemctl not found. systemd is unavailable on this system.",
               file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001
@@ -376,10 +367,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="boostlock",
         description=textwrap.dedent("""\
-            boostlock - 24/7 sustained CPU boost clock management.
-            Tricks the hardware into holding peak boost frequency continuously
-            through sysfs governor pinning, PM QoS C-state prevention, and
-            adaptive micro-pulse stimulation.
+            Keep CPU boost available on Linux.
+            Run commands as root.
         """),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -414,13 +403,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--duty",
         type=float,
         metavar="PERCENT",
-        help="Initial pulse duty cycle 0-100%% (default: 15%%)",
+        help="Initial pulse duty cycle from 0 to 100%% (default: 15%%)",
     )
     p_start.add_argument(
         "--max-temp",
         type=float,
         metavar="CELSIUS",
-        help="Critical temperature threshold in C (default: 100.0)",
+        help="Critical temperature limit in C (default: 100.0)",
     )
 
     # -- stop ----------------------------------------------------------------

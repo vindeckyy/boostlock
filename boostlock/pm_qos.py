@@ -1,9 +1,7 @@
 """
-PM QoS (Power Management Quality of Service) CPU DMA Latency Lock & C-State Management.
+PM QoS CPU DMA-latency management.
 
-Controls /dev/cpu_dma_latency to prohibit the Linux kernel cpuidle subsystem from
-transitioning CPU cores into deep sleep states (C2, C3, C6), keeping them primed in
-C0/C1 for immediate boost responsiveness. Includes fallback cpuidle sysfs management.
+Controls `/dev/cpu_dma_latency` and can fall back to cpuidle sysfs settings.
 """
 
 from __future__ import annotations

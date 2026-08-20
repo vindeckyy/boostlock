@@ -550,6 +550,16 @@ class TestCmdStart:
         assert rc == 0
         mock_daemon.run.assert_called_once()
 
+    def test_start_applies_target_to_configuration(self, tmp_path):
+        args = argparse.Namespace(daemon=False, target=3900.0, duty=None, max_temp=None)
+        mock_daemon = MagicMock()
+        with patch("boostlock.cli.BoostLockDaemon", return_value=mock_daemon) as daemon_class:
+            rc = cmd_start(args, tmp_path / "test.sock", tmp_path / "test.pid")
+
+        assert rc == 0
+        config = daemon_class.call_args.kwargs["config"]
+        assert config.target_frequency_khz == 3_900_000
+
     def test_start_foreground_keyboard_interrupt(self, tmp_path, capsys):
         args = argparse.Namespace(daemon=False, target=None, duty=None, max_temp=None)
         mock_daemon = MagicMock()

@@ -1,5 +1,5 @@
 """
-BoostLock IPC Protocol: Typed commands, request/response models, and stream encoding (FEAT-05).
+IPC commands and request-response encoding.
 """
 
 from __future__ import annotations

@@ -5,17 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "boostlock"
 version = "0.1.0"
-description = "Keep CPU boost available on Linux"
+description = "Linux CPU boost manager"
 readme = "README.md"
 authors = [
     { name = "vindeckyy" }
 ]
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = []
 
 [project.scripts]
 boostlock = "boostlock.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["boostlock*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

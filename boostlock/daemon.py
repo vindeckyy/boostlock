@@ -677,15 +677,15 @@ class BoostLockDaemon:
     def _on_thermal_warning(self, reading: ThermalReading) -> None:
         """Callback invoked when temperature enters warning zone."""
         logger.warning(
-            f"Thermal WARNING: Current temp {reading.current_temp_c:.1f}C, "
-            f"throttling clamp factor={reading.clamp_factor:.2f}"
+            f"Temperature is {reading.current_temp_c:.1f}C. "
+            f"Pulse-duty clamp is {reading.clamp_factor:.2f}."
         )
 
     def _on_thermal_tripwire(self, reading: ThermalReading) -> None:
         """Callback invoked when emergency thermal tripwire triggers."""
         logger.critical(
-            f"Thermal TRIPWIRE BREACH: Current temp {reading.current_temp_c:.1f}C >= "
-            f"{self.config.thermal_limit_c}C! Disengaging pulse stimulation!"
+            f"Temperature {reading.current_temp_c:.1f}C reached the "
+            f"{self.config.thermal_limit_c}C limit. Pausing pulse stimulation."
         )
         with self._lock:
             self._state = DaemonState.THROTTLED
@@ -697,8 +697,8 @@ class BoostLockDaemon:
     def _on_thermal_recovery(self, reading: ThermalReading) -> None:
         """Callback invoked when temperature recovers below hysteretic recovery floor."""
         logger.info(
-            f"Thermal RECOVERY: Temp cooled to {reading.current_temp_c:.1f}C <= "
-            f"{self.config.thermal_recover_c}C. Re-engaging boost stimulation."
+            f"Temperature {reading.current_temp_c:.1f}C is below the "
+            f"{self.config.thermal_recover_c}C recovery limit. Resuming pulse stimulation."
         )
         with self._lock:
             if self._state == DaemonState.THROTTLED:

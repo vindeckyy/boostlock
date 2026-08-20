@@ -1,5 +1,5 @@
 [Unit]
-Description=BoostLock - 24/7 Sustained CPU Boost Clock Management System
+Description=BoostLock CPU boost manager
 Documentation=https://github.com/vindeckyy/boostlock
 After=syslog.target network.target
 Wants=network.target

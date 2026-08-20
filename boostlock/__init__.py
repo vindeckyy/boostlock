@@ -1,5 +1,5 @@
 """
-BoostLock: 24/7 Sustained CPU Boost Clock Management System.
+Linux CPU boost manager.
 """
 
 from boostlock.bench import BenchmarkRunner, BenchResult, BenchSample

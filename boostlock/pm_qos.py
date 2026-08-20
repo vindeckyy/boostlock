@@ -1,0 +1,273 @@
+"""
+PM QoS (Power Management Quality of Service) CPU DMA Latency Lock & C-State Management.
+
+Controls /dev/cpu_dma_latency to prohibit the Linux kernel cpuidle subsystem from
+transitioning CPU cores into deep sleep states (C2, C3, C6), keeping them primed in
+C0/C1 for immediate boost responsiveness. Includes fallback cpuidle sysfs management.
+"""
+
+from __future__ import annotations
+
+import errno
+import logging
+import os
+import struct
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+from boostlock.sysfs import SysfsController, SysfsError, SysfsPermissionError
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_CPU_DMA_LATENCY_PATH = "/dev/cpu_dma_latency"
+INT32_MAX = 2147483647
+
+
+class PMQoSError(Exception):
+    """Base exception for PM QoS operations."""
+    pass
+
+
+class PMQoSPermissionError(PMQoSError, PermissionError):
+    """Raised when opening or writing to /dev/cpu_dma_latency fails due to permissions."""
+    pass
+
+
+class PMQoSNotFoundError(PMQoSError, FileNotFoundError):
+    """Raised when /dev/cpu_dma_latency does not exist and fallback is disabled."""
+    pass
+
+
+class PMQoSLockError(PMQoSError):
+    """Raised when PM QoS lock cannot be acquired or modified."""
+    pass
+
+
+class PMQoSController:
+    """
+    Manages PM QoS CPU DMA latency constraint to prevent deep CPU C-states.
+
+    When opened and held open with a target latency of 0 microseconds, the Linux
+    kernel's cpuidle governor will not select idle states with exit latency > 0,
+    effectively pinning CPU cores in active execution (C0) or shallow idle (C1).
+    """
+
+    def __init__(
+        self,
+        device_path: Union[str, Path] = DEFAULT_CPU_DMA_LATENCY_PATH,
+        sysfs_root: Union[str, Path] = "/sys",
+        target_latency_us: int = 0,
+        enable_sysfs_fallback: bool = True,
+        min_fallback_state_index: int = 1,
+    ) -> None:
+        self.device_path = Path(device_path)
+        self.sysfs_root = Path(sysfs_root).resolve()
+        self.sysfs = SysfsController(sysfs_root=self.sysfs_root)
+        self.enable_sysfs_fallback = enable_sysfs_fallback
+        self.min_fallback_state_index = min_fallback_state_index
+
+        self._validate_latency(target_latency_us)
+        self._target_latency_us = target_latency_us
+
+        self._fd: Optional[int] = None
+        self._is_locked: bool = False
+        self._using_fallback: bool = False
+        self._fallback_saved_states: Dict[str, str] = {}
+
+    @property
+    def target_latency_us(self) -> int:
+        return self._target_latency_us
+
+    @property
+    def is_locked(self) -> bool:
+        return self._is_locked
+
+    @property
+    def using_fallback(self) -> bool:
+        return self._using_fallback
+
+    @property
+    def fd(self) -> Optional[int]:
+        return self._fd
+
+    def _validate_latency(self, latency_us: int) -> None:
+        if latency_us < 0:
+            raise ValueError(f"target_latency_us must be non-negative, got {latency_us}")
+        if latency_us > INT32_MAX:
+            raise ValueError(f"target_latency_us exceeds maximum 32-bit integer ({INT32_MAX}), got {latency_us}")
+
+    def lock(self, target_latency_us: Optional[int] = None) -> bool:
+        """
+        Acquire PM QoS lock by opening /dev/cpu_dma_latency and writing latency target.
+        Falls back to cpuidle sysfs state disabling if device is unavailable.
+        """
+        if target_latency_us is not None:
+            self._validate_latency(target_latency_us)
+            self._target_latency_us = target_latency_us
+
+        if self._is_locked:
+            if not self._using_fallback and self._fd is not None:
+                # Update existing lock latency
+                try:
+                    try:
+                        os.lseek(self._fd, 0, os.SEEK_SET)
+                    except OSError:
+                        pass
+                    payload = struct.pack("i", self._target_latency_us)
+                    os.write(self._fd, payload)
+                    return True
+                except OSError as exc:
+                    logger.warning(f"Failed to update PM QoS latency on open fd: {exc}")
+            return True
+
+        # Attempt to open device node
+        try:
+            flags = os.O_RDWR
+            if hasattr(os, "O_CLOEXEC"):
+                flags |= os.O_CLOEXEC
+
+            fd = os.open(str(self.device_path), flags)
+            payload = struct.pack("i", self._target_latency_us)
+            os.write(fd, payload)
+
+            self._fd = fd
+            self._is_locked = True
+            self._using_fallback = False
+            logger.info(
+                f"Acquired PM QoS DMA latency lock ({self._target_latency_us} us) on {self.device_path}"
+            )
+            return True
+
+        except PermissionError as exc:
+            if not self.enable_sysfs_fallback:
+                raise PMQoSPermissionError(
+                    f"Permission denied accessing {self.device_path}. Run with sudo/root privileges."
+                ) from exc
+            logger.warning(
+                f"Permission denied on {self.device_path}, falling back to cpuidle sysfs disable: {exc}"
+            )
+            return self._lock_via_sysfs_fallback()
+
+        except FileNotFoundError as exc:
+            if not self.enable_sysfs_fallback:
+                raise PMQoSNotFoundError(
+                    f"PM QoS device node not found at {self.device_path} and fallback is disabled."
+                ) from exc
+            logger.info(
+                f"Device {self.device_path} not found, using cpuidle sysfs fallback."
+            )
+            return self._lock_via_sysfs_fallback()
+
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+                if not self.enable_sysfs_fallback:
+                    raise PMQoSPermissionError(
+                        f"Permission error (errno {exc.errno}) accessing {self.device_path}."
+                    ) from exc
+                logger.warning(
+                    f"Permission error on {self.device_path}, using cpuidle sysfs fallback."
+                )
+                return self._lock_via_sysfs_fallback()
+
+            if not self.enable_sysfs_fallback:
+                raise PMQoSError(
+                    f"Failed to write target latency to {self.device_path}: {exc}"
+                ) from exc
+
+            logger.warning(
+                f"Error writing to {self.device_path} ({exc}), attempting cpuidle sysfs fallback."
+            )
+            return self._lock_via_sysfs_fallback()
+
+    def _lock_via_sysfs_fallback(self) -> bool:
+        """Fallback mechanism: disable deep C-states via sysfs cpuidle nodes."""
+        self._fallback_saved_states.clear()
+
+        try:
+            cpus = self.sysfs.get_online_cpus()
+            for cpu in cpus:
+                cpu_dir = self.sysfs._resolve_path(f"devices/system/cpu/cpu{cpu}/cpuidle")
+                if not cpu_dir.is_dir():
+                    continue
+
+                for state_entry in sorted(cpu_dir.iterdir()):
+                    if not state_entry.is_dir() or not state_entry.name.startswith("state"):
+                        continue
+
+                    try:
+                        state_idx = int(state_entry.name[5:])
+                    except ValueError:
+                        continue
+
+                    if state_idx < self.min_fallback_state_index:
+                        continue
+
+                    disable_path = f"devices/system/cpu/cpu{cpu}/cpuidle/{state_entry.name}/disable"
+                    current_val = self.sysfs._read_file(disable_path)
+                    if current_val is not None:
+                        self._fallback_saved_states[disable_path] = current_val
+                        self.sysfs._write_file(disable_path, "1")
+
+            self._is_locked = True
+            self._using_fallback = True
+            logger.info("PM QoS lock active via cpuidle sysfs fallback.")
+            return True
+
+        except (SysfsPermissionError, PermissionError) as exc:
+            raise PMQoSPermissionError(
+                "Permission denied disabling cpuidle states via sysfs. Run with root privileges."
+            ) from exc
+        except Exception as exc:
+            self.unlock()
+            raise PMQoSError(f"Failed to configure cpuidle sysfs fallback: {exc}") from exc
+
+    def unlock(self) -> None:
+        """Release PM QoS lock and restore any modified cpuidle states."""
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError as exc:
+                logger.debug(f"Error closing PM QoS fd {self._fd}: {exc}")
+            finally:
+                self._fd = None
+
+        if self._using_fallback:
+            for subpath, original_val in self._fallback_saved_states.items():
+                try:
+                    self.sysfs._write_file(subpath, original_val, optional=True)
+                except Exception as exc:
+                    logger.warning(f"Failed to restore cpuidle state at {subpath}: {exc}")
+            self._fallback_saved_states.clear()
+            self._using_fallback = False
+
+        self._is_locked = False
+        logger.info("PM QoS DMA latency lock released.")
+
+    def release(self) -> None:
+        """Alias for unlock()."""
+        self.unlock()
+
+    def get_current_latency(self) -> Optional[int]:
+        """Read current latency value from device node if supported, or return None."""
+        if not self.device_path.exists():
+            return None
+        try:
+            with open(self.device_path, "rb") as f:
+                data = f.read(4)
+                if len(data) == 4:
+                    return struct.unpack("i", data)[0]
+        except Exception as exc:
+            logger.debug(f"Unable to read latency from {self.device_path}: {exc}")
+        return None
+
+    def __enter__(self) -> PMQoSController:
+        self.lock()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[Any],
+    ) -> None:
+        self.unlock()

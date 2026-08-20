@@ -1,0 +1,19 @@
+[Unit]
+Description=BoostLock - 24/7 Sustained CPU Boost Clock Management System
+Documentation=https://github.com/boostlock/boostlock
+After=syslog.target network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/boostlock daemon
+ExecStop=/usr/local/bin/boostlock stop
+Restart=on-failure
+RestartSec=5s
+KillMode=mixed
+TimeoutStopSec=10
+ProtectSystem=full
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_NICE
+AmbientCapabilities=CAP_SYS_ADMIN CAP_SYS_NICE
+
+[Install]
+WantedBy=multi-user.target

@@ -14,6 +14,7 @@ import pytest
 
 from boostlock.cli import (
     DEFAULT_SOCKET_PATH,
+    SYSTEMD_SERVICE_SRC,
     build_parser,
     cmd_bench,
     cmd_restore,
@@ -454,6 +455,10 @@ class TestCmdRestore:
 # ---------------------------------------------------------------------------
 
 class TestCmdService:
+    def test_service_source_is_bundled_with_package(self):
+        assert SYSTEMD_SERVICE_SRC.parts[-3:] == ("boostlock", "data", "boostlock.service")
+        assert SYSTEMD_SERVICE_SRC.exists()
+
     def test_service_status_calls_systemctl(self, tmp_path):
         args = argparse.Namespace(service_action="status")
         mock_result = MagicMock()
@@ -591,6 +596,8 @@ class TestCmdStart:
         assert "--target" in cmd_used
         assert "--duty" in cmd_used
         assert "--max-temp" in cmd_used
+        assert "--socket" in cmd_used
+        assert str(tmp_path / "test.sock") in cmd_used
 
 
 # ---------------------------------------------------------------------------

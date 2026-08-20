@@ -30,7 +30,7 @@ DEFAULT_SOCKET_PATH = Path(
 DEFAULT_PID_PATH = Path(
     os.environ.get("BOOSTLOCK_PID", "/var/run/boostlock/boostlock.pid")
 )
-SYSTEMD_SERVICE_SRC = Path(__file__).parent.parent / "systemd" / "boostlock.service"
+SYSTEMD_SERVICE_SRC = Path(__file__).parent / "data" / "boostlock.service"
 SYSTEMD_SERVICE_DST = Path("/etc/systemd/system/boostlock.service")
 
 
@@ -81,7 +81,14 @@ def cmd_start(args: argparse.Namespace, socket_path: Path, pid_path: Path) -> in
     if args.daemon:
         # Spawn a background process
         try:
-            cmd = [sys.executable, "-m", "boostlock.cli", "start"]
+            cmd = [
+                sys.executable,
+                "-m",
+                "boostlock.cli",
+                "--socket",
+                str(socket_path),
+                "start",
+            ]
             if args.target:
                 cmd += ["--target", str(args.target)]
             if args.duty:

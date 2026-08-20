@@ -1,8 +1,7 @@
 [Unit]
-Description=BoostLock CPU boost manager
+Description=Keep CPU boost available with BoostLock
 Documentation=https://github.com/vindeckyy/boostlock
-After=syslog.target network.target
-Wants=network.target
+After=local-fs.target
 
 [Service]
 Type=simple
@@ -12,6 +11,8 @@ Restart=on-failure
 RestartSec=5
 KillMode=mixed
 TimeoutStopSec=10
+RuntimeDirectory=boostlock
+RuntimeDirectoryMode=0755
 ProtectSystem=full
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_NICE
 AmbientCapabilities=CAP_SYS_ADMIN CAP_SYS_NICE
@@ -19,4 +20,3 @@ NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target
-WantedBy=graphical.target

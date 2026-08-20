@@ -693,8 +693,8 @@ class TestSystemdServiceFile:
     """Tests for systemd unit file presence and valid formatting."""
 
     def test_systemd_unit_file(self):
-        unit_file = Path(__file__).resolve().parents[1] / "systemd" / "boostlock.service"
-        assert unit_file.exists(), "boostlock.service must exist in systemd/"
+        unit_file = Path(__file__).resolve().parents[1] / "boostlock" / "data" / "boostlock.service"
+        assert unit_file.exists(), "boostlock.service must be bundled with the package"
         content = unit_file.read_text(encoding="utf-8")
 
         assert "[Unit]" in content

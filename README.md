@@ -81,6 +81,10 @@ sudo systemctl status boostlock
 
 The unit starts `/usr/local/bin/boostlock`. Verify that path exists on the target machine before enabling the service.
 
+## Maintainer
+
+BoostLock is maintained by [vindeckyy](https://github.com/vindeckyy).
+
 ## Troubleshooting
 
 Run commands with `sudo`. CPU sysfs files and `/dev/cpu_dma_latency` usually reject unprivileged writes.
@@ -94,6 +98,7 @@ If the machine was shut down abruptly, run `sudo boostlock restore` before start
 Run the test suite from a checkout:
 
 ```bash
+python3 -m pip install -e ".[dev]"
 python3 -m pytest
 ```
 
@@ -102,3 +107,5 @@ The tests use temporary sysfs and socket paths, so they do not require root.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Release history is in [CHANGELOG.md](CHANGELOG.md). Security reports belong in the repository's private vulnerability reporting flow. See [SECURITY.md](SECURITY.md).

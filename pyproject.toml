@@ -1,24 +1,51 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "boostlock"
 version = "0.1.0"
-description = "Linux CPU boost manager"
+description = "Keep CPU boost available on Linux"
 readme = "README.md"
 authors = [
     { name = "vindeckyy" }
 ]
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = []
+keywords = ["cpu", "cpufreq", "linux", "performance", "systemd"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Hardware",
+]
+
+[project.urls]
+Homepage = "https://github.com/vindeckyy/boostlock"
+Source = "https://github.com/vindeckyy/boostlock"
+Issues = "https://github.com/vindeckyy/boostlock/issues"
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
 
 [project.scripts]
 boostlock = "boostlock.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["boostlock*"]
+
+[tool.setuptools.package-data]
+boostlock = ["data/*.service"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

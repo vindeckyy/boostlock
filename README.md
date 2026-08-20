@@ -10,7 +10,7 @@ It requires root and can raise idle power use and temperature. Use it on a syste
 - Python 3.10 or later
 - Root access for the CPU and PM QoS settings
 
-BoostLock operates on Linux cpufreq policies instead of CPU model names. It needs a writable governor and policy frequency limits. Boost, CPB, EPP, EPB, PM QoS, and cpuidle controls are optional and reported as skipped when the kernel does not expose them.
+BoostLock bases its decisions on Linux cpufreq policy capabilities. CPU model names remain display metadata. It needs a writable governor and policy frequency limits. Boost, CPB, EPP, EPB, PM QoS, and cpuidle controls are optional and reported as skipped when the kernel does not expose them.
 
 | Linux capability | Result |
 | --- | --- |
@@ -20,6 +20,14 @@ BoostLock operates on Linux cpufreq policies instead of CPU model names. It need
 | Firmware-only frequency management or no usable policy | Start fails before changing settings |
 
 Intel, AMD, and ARM policy fixtures are covered by the automated tests. A policy-capable driver is eligible, but that does not promise a particular boost frequency.
+
+## CPU policy support
+
+At startup, BoostLock discovers `/sys/devices/system/cpu/cpufreq/policy*` entries and groups their member CPUs. It falls back to `cpuN/cpufreq` only when policy directories are unavailable, then removes duplicate aliases.
+
+Each usable policy gets its own frequency bounds and effective target. In automatic mode, that target is the policy's active upper limit. A numeric request is clamped within that policy's usable range. A mixed-capacity machine can therefore use different effective targets without one policy inheriting another policy's limit.
+
+Before BoostLock changes a setting, it builds the full policy plan, saves the affected values, and opens every planned path for writing. A preflight failure leaves settings unchanged. A later write failure restores completed actions in reverse order and reports any restore failure.
 
 ## Install
 
@@ -57,13 +65,31 @@ sudo boostlock stop
 sudo boostlock restore
 ```
 
-`--target` accepts a MHz value or `auto`. Omitting it selects `auto`, which uses each policy's active upper limit instead of guessing a boost clock. Numeric targets remain explicit requests and are clamped separately for every policy. `--duty` is the initial pulse duty percentage.
+`--target` accepts a MHz value or `auto`. Omitting it selects `auto`, which uses each policy's active upper limit. Numeric targets remain explicit requests and are clamped separately for every policy. `--duty` is the initial pulse duty percentage.
+
+Use an explicit request only when you need one:
+
+```bash
+sudo boostlock start --target 3900 --duty 5 --max-temp 90
+```
 
 ## What happens when it starts
 
-`BoostLockDaemon.start()` saves the current CPU state before it changes anything. It then sets the configured governor and boost controls, opens the PM QoS latency device, starts thermal monitoring and pulse workers, and opens the Unix socket used by `status` and `stop`.
+`BoostLockDaemon.start()` creates a policy plan, snapshots the values it will change, and preflights each planned write before the first mutation. It then applies the configured governor, policy frequency limits, and any available boost controls as one transaction.
+
+PM QoS uses `/dev/cpu_dma_latency` when it can preflight the device. Its cpuidle fallback is selected only when every planned fallback path can be opened. If neither route is usable, BoostLock records the skip and continues without PM QoS. Thermal monitoring, pulse workers, and the Unix socket start only after the transaction succeeds.
 
 The daemon restores the saved governor, frequency limits, boost settings, EPP or EPB settings, and cpuidle state when it stops. Signal handlers cover normal termination. `kill -9` cannot run cleanup, so run `sudo boostlock restore` after a forced kill.
+
+## Reading policy status
+
+Use JSON status output to inspect the resolved plan:
+
+```bash
+sudo boostlock status --json
+```
+
+Each policy entry includes its identifier, member CPUs, driver, requested target, effective target, clamp reason, applied controls, and skipped controls. This is useful on systems with performance and efficiency policies or a mixture of CPU drivers.
 
 ## Thermal behavior
 

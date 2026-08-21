@@ -30,22 +30,22 @@ logger = logging.getLogger(__name__)
 
 
 class IPCError(Exception):
-    """Base exception for BoostLock IPC operations."""
+    """IPC error."""
     pass
 
 
 class IPCConnectionError(IPCError):
-    """Raised when connecting to or communicating with the IPC server fails."""
+    """IPC connection failed."""
     pass
 
 
 class IPCTimeoutError(IPCError, TimeoutError):
-    """Raised when an IPC operation times out."""
+    """IPC timed out."""
     pass
 
 
 class IPCPermissionError(IPCError, PermissionError):
-    """Raised when accessing the IPC socket fails due to permissions."""
+    """IPC permission error."""
     pass
 
 

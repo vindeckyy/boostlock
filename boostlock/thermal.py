@@ -19,22 +19,22 @@ logger = logging.getLogger(__name__)
 
 
 class ThermalError(Exception):
-    """Base exception for thermal subsystem errors."""
+    """Thermal error."""
     pass
 
 
 class SensorReadError(ThermalError):
-    """Raised when reading from a thermal sensor fails."""
+    """Sensor read failed."""
     pass
 
 
 class ThermalTripwireError(ThermalError):
-    """Raised when the emergency thermal tripwire limit is breached."""
+    """Thermal limit hit."""
     pass
 
 
 class ThermalState(str, Enum):
-    """Thermal operating zones for BoostLock."""
+    """Thermal state."""
     NORMAL = "NORMAL"        # T < T_warn: Normal operation, full boost allowed (clamp = 1.0)
     WARNING = "WARNING"      # T_warn <= T < T_trip: Duty cycle throttled proportionally
     THROTTLED = "THROTTLED"  # Actively throttled or recovering from tripwire below T_recover
@@ -42,7 +42,7 @@ class ThermalState(str, Enum):
 
 
 class SensorType(str, Enum):
-    """Types of thermal and power monitoring interfaces."""
+    """Sensor type."""
     HWMON = "hwmon"
     THERMAL_ZONE = "thermal_zone"
     POWERCAP = "powercap"
@@ -50,7 +50,7 @@ class SensorType(str, Enum):
 
 @dataclass
 class ThermalSensor:
-    """Represents a discovered hardware thermal sensor."""
+    """A thermal sensor."""
 
     sensor_id: str
     name: str
@@ -62,22 +62,19 @@ class ThermalSensor:
     max_temp_c: Optional[float] = None
 
     def read_temp_c(self) -> Optional[float]:
-        """
-        Read temperature in degrees Celsius.
-        Returns None if file is missing, unreadable, or contains invalid data.
-        """
+        """Read temp in C, None if it fails."""
         if not self.path.is_file():
             return None
         try:
             raw = self.path.read_text(encoding="utf-8").strip()
             val = float(raw)
-            # Linux sysfs sensors report in millidegrees Celsius (e.g., 55000 = 55.0C)
+            # sysfs reports millidegrees
             if abs(val) > 1000.0:
                 temp_c = val / 1000.0
             else:
                 temp_c = val
 
-            # Basic sanity check (-40C to 150C)
+            # sanity check
             if -40.0 <= temp_c <= 150.0:
                 return temp_c
             logger.debug(f"Sensor {self.sensor_id} reported out-of-bounds temp: {temp_c}C")
@@ -88,10 +85,7 @@ class ThermalSensor:
 
 
 class SpikeFilter:
-    """
-    Rolling window median filter and rate-of-change limiter.
-    Filters out transient hardware reading glitches and single-sample sensor anomalies.
-    """
+    """Median filter to smooth out bad sensor reads."""
 
     def __init__(
         self,
@@ -127,7 +121,7 @@ class SpikeFilter:
 
 @dataclass
 class RAPLReading:
-    """Snapshot of RAPL energy and computed power draw."""
+    """RAPL reading."""
 
     name: str
     energy_uj: Optional[int]
@@ -136,9 +130,7 @@ class RAPLReading:
 
 
 class RAPLMonitor:
-    """
-    Monitors Intel / AMD RAPL (Running Average Power Limit) package energy and wattage.
-    """
+    """Read RAPL package power if available."""
 
     def __init__(self, sysfs_root: Union[str, Path] = "/sys") -> None:
         self.sysfs_root = Path(sysfs_root).resolve()
@@ -159,7 +151,7 @@ class RAPLMonitor:
             else:
                 return
 
-        # Look for intel-rapl:0 or package-0
+        # find package-0
         for entry in sorted(self.rapl_dir.glob("intel-rapl:*")):
             if entry.is_dir():
                 self._pkg_dir = entry
@@ -216,7 +208,7 @@ class RAPLMonitor:
             if dt > 0.0001:
                 delta_uj = current_energy - self._last_energy_uj
                 if delta_uj < 0 and self._max_energy_range_uj:
-                    # Wraparound occurred
+                    # handle wraparound
                     delta_uj += self._max_energy_range_uj
                 if delta_uj >= 0:
                     power_w = (delta_uj / 1_000_000.0) / dt
@@ -234,7 +226,7 @@ class RAPLMonitor:
 
 @dataclass
 class ThermalReading:
-    """Snapshot of complete thermal status."""
+    """Thermal status."""
 
     timestamp: float
     current_temp_c: float
@@ -246,10 +238,7 @@ class ThermalReading:
 
 
 def discover_sensors(sysfs_root: Union[str, Path] = "/sys") -> List[ThermalSensor]:
-    """
-    Discover all thermal sensors in hwmon and thermal_zone sysfs trees.
-    CPU-specific sensors (k10temp, coretemp, acpitz, etc.) are prioritized first.
-    """
+    """Find thermal sensors in hwmon and thermal_zone."""
     root = Path(sysfs_root).resolve()
     discovered: List[ThermalSensor] = []
 

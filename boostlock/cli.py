@@ -21,9 +21,6 @@ from .ipc import IPCClient
 from .protocol import Command, Request
 from .state import StateSnapshotManager
 
-# ---------------------------------------------------------------------------
-# Default paths, overridable for tests and custom deployments.
-# ---------------------------------------------------------------------------
 DEFAULT_SOCKET_PATH = Path(
     os.environ.get("BOOSTLOCK_SOCKET", "/var/run/boostlock/boostlock.sock")
 )
@@ -32,7 +29,6 @@ DEFAULT_PID_PATH = Path(
 )
 SYSTEMD_SERVICE_SRC = Path(__file__).parent / "data" / "boostlock.service"
 SYSTEMD_SERVICE_DST = Path("/etc/systemd/system/boostlock.service")
-
 
 def _parse_target_mhz(value: str) -> str | float:
     """Parse an explicit MHz target or the automatic policy mode."""
@@ -46,11 +42,6 @@ def _parse_target_mhz(value: str) -> str | float:
         raise argparse.ArgumentTypeError("target must be a positive MHz value or 'auto'")
     return target_mhz
 
-
-# ---------------------------------------------------------------------------
-# Command helpers
-# ---------------------------------------------------------------------------
-
 def _connect_client(socket_path: Path):
     """Return a connected IPCClient, or None with an error already printed."""
     try:
@@ -62,7 +53,6 @@ def _connect_client(socket_path: Path):
         print("[boostlock] Is the daemon running?  Try: boostlock start --daemon",
               file=sys.stderr)
         return None
-
 
 def _send_command(client, cmd: str, **kwargs) -> Optional[Dict[str, Any]]:
     """Send a command and return the parsed response body, or None on error."""
@@ -83,11 +73,6 @@ def _send_command(client, cmd: str, **kwargs) -> Optional[Dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         print(f"[boostlock] Communication error: {exc}", file=sys.stderr)
         return None
-
-
-# ---------------------------------------------------------------------------
-# Start command
-# ---------------------------------------------------------------------------
 
 def cmd_start(args: argparse.Namespace, socket_path: Path, pid_path: Path) -> int:
     """Start boostlock in the foreground (or as a daemon if --daemon)."""
@@ -158,11 +143,6 @@ def cmd_start(args: argparse.Namespace, socket_path: Path, pid_path: Path) -> in
         print(f"[boostlock] Fatal error: {exc}", file=sys.stderr)
         return 1
 
-
-# ---------------------------------------------------------------------------
-# Stop command
-# ---------------------------------------------------------------------------
-
 def cmd_stop(args: argparse.Namespace, socket_path: Path) -> int:
     client = _connect_client(socket_path)
     if client is None:
@@ -172,11 +152,6 @@ def cmd_stop(args: argparse.Namespace, socket_path: Path) -> int:
         return 1
     print("[boostlock] Daemon stopped successfully.")
     return 0
-
-
-# ---------------------------------------------------------------------------
-# Status command
-# ---------------------------------------------------------------------------
 
 def cmd_status(args: argparse.Namespace, socket_path: Path) -> int:
     client = _connect_client(socket_path)
@@ -193,7 +168,6 @@ def cmd_status(args: argparse.Namespace, socket_path: Path) -> int:
     # Pretty table
     _render_status_table(data, watch=getattr(args, "watch", False))
     return 0
-
 
 def _render_status_table(data: Dict[str, Any], watch: bool = False) -> None:
     """Print a human-readable status table."""
@@ -258,11 +232,6 @@ def _render_status_table(data: Dict[str, Any], watch: bool = False) -> None:
         except KeyboardInterrupt:
             pass
 
-
-# ---------------------------------------------------------------------------
-# Benchmark command
-# ---------------------------------------------------------------------------
-
 def cmd_bench(args: argparse.Namespace) -> int:
     """Run boost clock stability benchmark."""
     try:
@@ -297,11 +266,6 @@ def cmd_bench(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"[boostlock] Benchmark error: {exc}", file=sys.stderr)
         return 1
-
-
-# ---------------------------------------------------------------------------
-# Restore command
-# ---------------------------------------------------------------------------
 
 def cmd_restore(args: argparse.Namespace) -> int:
     """Manually trigger emergency state restoration from snapshot."""
@@ -338,11 +302,6 @@ def cmd_restore(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"[boostlock] Restore error: {exc}", file=sys.stderr)
         return 1
-
-
-# ---------------------------------------------------------------------------
-# Systemd service command
-# ---------------------------------------------------------------------------
 
 def cmd_service(args: argparse.Namespace) -> int:
     """Manage the systemd boostlock.service unit."""
@@ -388,17 +347,11 @@ def cmd_service(args: argparse.Namespace) -> int:
         print(f"[boostlock] Service command failed: {exc}", file=sys.stderr)
         return 1
 
-
-# ---------------------------------------------------------------------------
-# Argument parser
-# ---------------------------------------------------------------------------
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="boostlock",
         description=textwrap.dedent("""\
-            Keep CPU boost available on Linux.
-            Run commands as root.
+            Keep CPU boost clocks up on Linux. Needs root.
         """),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -416,7 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_start = subparsers.add_parser(
         "start",
         help="Start the boost-lock engine",
-        description="Lock CPU to boost frequency. Uses foreground mode unless --daemon.",
+        description="Lock CPU boost. Runs in foreground unless --daemon is set.",
     )
     p_start.add_argument(
         "--daemon", "-d",
@@ -427,19 +380,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--target",
         type=_parse_target_mhz,
         metavar="MHZ",
-        help="Target boost frequency in MHz (default: auto-detect from CPU)",
+        help="Target frequency in MHz or auto (default: auto)",
     )
     p_start.add_argument(
         "--duty",
         type=float,
         metavar="PERCENT",
-        help="Initial pulse duty cycle from 0 to 100%% (default: 15%%)",
+        help="Pulse duty 0-100%% (default: 15%%)",
     )
     p_start.add_argument(
         "--max-temp",
         type=float,
         metavar="CELSIUS",
-        help="Critical temperature limit in C (default: 100.0)",
+        help="Thermal limit in C (default: 100.0)",
     )
 
     # -- stop ----------------------------------------------------------------
@@ -453,12 +406,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = subparsers.add_parser(
         "status",
         help="Show real-time boost status",
-        description="Display per-core frequency table, temperatures, and boost state.",
+        description="Show frequencies, temps and boost state.",
     )
     p_status.add_argument(
         "--watch", "-w",
         action="store_true",
-        help="Continuously refresh (similar to watch(1))",
+        help="Refresh every second",
     )
     p_status.add_argument(
         "--json",
@@ -470,7 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bench = subparsers.add_parser(
         "bench",
         help="Run a boost-clock stability benchmark",
-        description="Sample per-core frequencies and compute boost compliance metrics.",
+        description="Sample frequencies and check boost compliance.",
     )
     p_bench.add_argument(
         "--duration",
@@ -503,8 +456,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "restore",
         help="Emergency state restoration from snapshot",
-        description="Manually restore the CPU governor and frequency settings "
-                    "that were saved when boostlock last started.",
+        description="Restore saved CPU settings from the snapshot.",
     )
 
     # -- service -------------------------------------------------------------
@@ -520,11 +472,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Parse arguments and dispatch to the appropriate subcommand."""
@@ -549,7 +496,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         parser.print_help()
         return 2
-
 
 if __name__ == "__main__":
     sys.exit(main())

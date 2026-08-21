@@ -38,22 +38,22 @@ PID_FILENAME = "boostlock.pid"
 
 
 class DaemonError(Exception):
-    """Base exception for BoostLock daemon operations."""
+    """Daemon error."""
     pass
 
 
 class DaemonRunningError(DaemonError):
-    """Raised when an active BoostLock daemon instance is already running."""
+    """Daemon already running."""
     pass
 
 
 class PIDFileError(DaemonError):
-    """Raised when PID file management operations fail."""
+    """PID file error."""
     pass
 
 
 class DaemonState(str, Enum):
-    """High-level operational lifecycle states of the BoostLock daemon."""
+    """Daemon state."""
     STOPPED = "STOPPED"
     INITIALIZING = "INITIALIZING"
     RUNNING = "RUNNING"
@@ -63,7 +63,7 @@ class DaemonState(str, Enum):
 
 
 def resolve_default_pid_path() -> Path:
-    """Determine the optimal writable PID file path."""
+    """Pick a writable PID path."""
     try:
         DEFAULT_PID_DIR.mkdir(parents=True, exist_ok=True)
         test_file = DEFAULT_PID_DIR / ".pid_write_test"
@@ -94,7 +94,7 @@ class PIDFileManager:
         return self._is_locked
 
     def read_pid(self) -> Optional[int]:
-        """Read PID from PID file if it exists."""
+        """Read PID if the file exists."""
         if not self.pid_path.is_file():
             return None
         try:
@@ -104,7 +104,7 @@ class PIDFileManager:
             return None
 
     def is_daemon_running(self) -> bool:
-        """Check whether the process referenced by the PID file is actively running."""
+        """Is the PID still running."""
         pid = self.read_pid()
         if pid is None:
             return False
@@ -119,8 +119,7 @@ class PIDFileManager:
             return False
 
     def acquire(self) -> bool:
-        """
-        Acquire exclusive flock on the PID file and write current PID.
+        """Lock the PID file and write our PID.
         Raises DaemonRunningError if another instance holds the lock.
         """
         self.pid_path.parent.mkdir(parents=True, exist_ok=True)

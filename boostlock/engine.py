@@ -24,22 +24,22 @@ logger = logging.getLogger(__name__)
 
 
 class EngineError(Exception):
-    """Base exception for pulse engine subsystem."""
+    """Pulse engine error."""
     pass
 
 
 class EngineStateError(EngineError):
-    """Raised on invalid engine lifecycle state transitions."""
+    """Bad engine state transition."""
     pass
 
 
 class AffinityError(EngineError):
-    """Raised when setting CPU affinity fails unexpectedly."""
+    """Affinity failed."""
     pass
 
 
 class EngineState(str, Enum):
-    """Operational state of the micro-pulse stimulation engine."""
+    """Engine state."""
     STOPPED = "STOPPED"
     STARTING = "STARTING"
     RUNNING = "RUNNING"
@@ -48,7 +48,7 @@ class EngineState(str, Enum):
 
 
 class TargetingMode(str, Enum):
-    """CPU core targeting and scheduling topology mode."""
+    """How cores are targeted."""
     ALL_CORES = "all_cores"
     PER_CCX = "per_ccx"
     ROUND_ROBIN = "round_robin"
@@ -56,7 +56,7 @@ class TargetingMode(str, Enum):
 
 
 class WaveformType(str, Enum):
-    """Waveform shaping for micro-pulse stimulation."""
+    """Pulse waveform shape."""
     SQUARE = "square"
     TRIANGULAR = "triangular"
     JITTERED = "jittered"
@@ -65,11 +65,7 @@ class WaveformType(str, Enum):
 
 
 def precise_sleep(duration_s: float, spin_threshold_s: float = 0.0005) -> None:
-    """
-    High-resolution hybrid sleep and busy-spin pause.
-    Sleeps for the bulk of duration to yield CPU to OS scheduler without burning power,
-    then executes a tight spin loop for sub-millisecond precision.
-    """
+    """Hybrid sleep then spin for precise timing."""
     if duration_s <= 0.0:
         return
 
@@ -85,10 +81,7 @@ def precise_sleep(duration_s: float, spin_threshold_s: float = 0.0005) -> None:
 
 
 def tight_alu_burst(iterations: int = 1000) -> int:
-    """
-    Tight ALU and register micro-operations loop.
-    Exercises CPU integer and logic pipeline to prevent core downclocking.
-    """
+    """Small ALU loop to keep the core from downclocking."""
     acc = 0x55555555
     for i in range(iterations):
         acc = (acc ^ (i * 2654435761)) & 0xFFFFFFFF
@@ -96,10 +89,7 @@ def tight_alu_burst(iterations: int = 1000) -> int:
 
 
 class WaveformGenerator:
-    """
-    Generates time-varying duty cycle waveforms (square, triangular, jittered, sine).
-    Prevents harmonic resonance and distributes thermal load over time.
-    """
+    """Vary duty over time so it does not sit at one frequency."""
 
     def __init__(
         self,
@@ -154,10 +144,7 @@ class WaveformGenerator:
 
 
 class ExternalLoadMonitor:
-    """
-    Monitors host system CPU load from /proc/stat to yield stimulation when
-    user workloads run, preventing CPU contention.
-    """
+    """Watch /proc/stat and back off when the system is busy."""
 
     def __init__(self, proc_stat_path: Union[str, Path] = "/proc/stat") -> None:
         self.proc_stat_path = Path(proc_stat_path)
@@ -165,10 +152,7 @@ class ExternalLoadMonitor:
         self._prev_total: Optional[int] = None
 
     def get_external_load_pct(self) -> float:
-        """
-        Sample CPU utilization percentage across all cores since last sample.
-        Returns 0.0 if unable to sample or on initial sample.
-        """
+        """Sample CPU usage since last call."""
         if not self.proc_stat_path.is_file():
             return 0.0
 
@@ -209,7 +193,7 @@ class ExternalLoadMonitor:
 
 @dataclass
 class _PolicyDutyState:
-    """Mutable feedback state for one cpufreq policy."""
+    """Per-policy feedback state."""
 
     current_duty_pct: float
     sample_count: int = 0
@@ -220,10 +204,7 @@ class _PolicyDutyState:
 
 
 class AdaptiveDutyController:
-    """
-    Closed-loop feedback controller that modulates micro-pulse duty cycle
-    based on real-time frequency feedback, thermal clamp factor, and external workload.
-    """
+    """Adjust duty based on freq feedback, thermals and load."""
 
     def __init__(
         self,
@@ -411,7 +392,7 @@ class AdaptiveDutyController:
 
 @dataclass
 class PulseMetrics:
-    """Real-time metrics for an individual pulse worker thread."""
+    """Metrics for one worker."""
     thread_id: int
     cpu_id: int
     policy_id: Optional[str] = None
@@ -588,7 +569,7 @@ class PulseWorker(threading.Thread):
 
 @dataclass
 class PolicyPulseMetrics:
-    """Controller and worker measurements for one cpufreq policy."""
+    """Metrics for one policy."""
 
     policy_id: str
     member_cpus: List[int]
@@ -610,7 +591,7 @@ class PolicyPulseMetrics:
 
 @dataclass
 class EngineMetrics:
-    """Aggregated real-time metrics for the PulseEngine."""
+    """Overall engine metrics."""
     state: EngineState
     overall_duty_cycle_pct: float
     target_frequency_khz: int
@@ -650,7 +631,7 @@ class EngineMetrics:
 
 
 class PulseEngine:
-    """Manage pulse workers and their controller thread."""
+    """Runs the pulse workers."""
 
     def __init__(
         self,

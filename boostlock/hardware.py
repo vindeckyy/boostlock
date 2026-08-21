@@ -23,14 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 class CPUVendor(str, Enum):
-    """CPU Hardware Vendor."""
+    """CPU vendor."""
     AMD = "AuthenticAMD"
     INTEL = "GenuineIntel"
     UNKNOWN = "Unknown"
 
 
 class ScalingDriver(str, Enum):
-    """CPU Frequency Scaling Driver."""
+    """Scaling driver."""
     ACPI_CPUFREQ = "acpi-cpufreq"
     AMD_PSTATE = "amd-pstate"
     AMD_PSTATE_EPP = "amd-pstate-epp"
@@ -42,7 +42,7 @@ class ScalingDriver(str, Enum):
 
 @dataclass
 class CoreInfo:
-    """Detailed information for a single logical CPU core."""
+    """One CPU core."""
     cpu_id: int
     physical_core_id: int = 0
     socket_id: int = 0
@@ -58,7 +58,7 @@ class CoreInfo:
 
 @dataclass
 class CPUInfo:
-    """System-wide CPU topology, capabilities, and frequency characteristics."""
+    """System CPU info."""
     vendor: CPUVendor = CPUVendor.UNKNOWN
     vendor_raw: str = ""
     model_name: str = "Generic CPU"
@@ -83,7 +83,7 @@ class CPUInfo:
 
 
 def detect_vendor(vendor_str: str) -> CPUVendor:
-    """Map raw vendor ID string to CPUVendor enum."""
+    """Map vendor string to enum."""
     if "AuthenticAMD" in vendor_str:
         return CPUVendor.AMD
     if "GenuineIntel" in vendor_str:
@@ -92,7 +92,7 @@ def detect_vendor(vendor_str: str) -> CPUVendor:
 
 
 def parse_driver(driver_str: Optional[str]) -> ScalingDriver:
-    """Map raw driver string to ScalingDriver enum."""
+    """Map driver string to enum."""
     if not driver_str:
         return ScalingDriver.UNKNOWN
     driver_clean = driver_str.strip().lower()
@@ -103,7 +103,7 @@ def parse_driver(driver_str: Optional[str]) -> ScalingDriver:
 
 
 def parse_proc_cpuinfo(content: str) -> Dict[str, Any]:
-    """Parse `/proc/cpuinfo` content into structured dictionary."""
+    """Parse /proc/cpuinfo."""
     processors: List[Dict[str, str]] = []
     current_proc: Dict[str, str] = {}
 
@@ -201,7 +201,7 @@ def lookup_boost_frequency(
     flags: Set[str],
     sysfs_root: Optional[str] = None,
 ) -> float:
-    """Return an explicitly exported boost limit, or the known policy maximum."""
+    """Get boost limit if known, else policy max."""
     del model_name, flags
     if not sysfs_root:
         return base_mhz

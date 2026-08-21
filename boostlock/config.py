@@ -18,20 +18,20 @@ class ConfigValidationError(ValueError):
 
 @dataclass
 class BoostLockConfig:
-    """Configuration options for BoostLock daemon and operations."""
+    """BoostLock config."""
 
     target_frequency_khz: Union[int, Literal["auto"]] = 4000000
-    # An explicit frequency in kHz, or automatic per-policy targeting.
-    min_pulse_duty_pct: float = 5.0      # Minimum pulse stimulation duty cycle (%)
-    max_pulse_duty_pct: float = 50.0     # Maximum pulse stimulation duty cycle (%)
-    duty_step_pct: float = 2.0           # Step size for duty cycle adjustment (%)
-    thermal_limit_c: float = 100.0        # Tripwire limit: emergency disengagement (C)
-    thermal_warn_c: float = 90.0         # Warning limit: proportional duty cycle throttling (C)
-    thermal_recover_c: float = 85.0      # Recovery hysteresis floor: re-engage boost (C)
-    poll_interval_ms: int = 100          # Sensor & closed-loop poll interval (ms)
-    dma_latency_us: int = 0              # PM QoS latency constraint in microseconds (0 = prevent C2+)
-    governor: str = "performance"        # CPU frequency scaling governor
-    epp: str = "performance"             # Energy Performance Preference
+    # kHz target or "auto"
+    min_pulse_duty_pct: float = 5.0
+    max_pulse_duty_pct: float = 50.0
+    duty_step_pct: float = 2.0
+    thermal_limit_c: float = 100.0
+    thermal_warn_c: float = 90.0
+    thermal_recover_c: float = 85.0
+    poll_interval_ms: int = 100
+    dma_latency_us: int = 0
+    governor: str = "performance"
+    epp: str = "performance"
     pid_file: str = "/var/run/boostlock/boostlock.pid"
     socket_path: str = "/var/run/boostlock/boostlock.sock"
     snapshot_path: str = "/var/run/boostlock/snapshot.json"
@@ -39,7 +39,7 @@ class BoostLockConfig:
 
     @property
     def pulse_duty_cycle(self) -> float:
-        """Legacy alias for min_pulse_duty_pct as 0-1 fraction."""
+        """Alias for min_pulse_duty_pct."""
         return self.min_pulse_duty_pct / 100.0
 
     @pulse_duty_cycle.setter
@@ -54,7 +54,7 @@ class BoostLockConfig:
             self.max_pulse_duty_pct = float(pct)
 
     def validate(self) -> None:
-        """Validate configuration settings and raise ConfigValidationError on invalid values."""
+        """Validate config."""
         target = self.target_frequency_khz
         if target == "auto":
             pass
@@ -115,18 +115,18 @@ class BoostLockConfig:
             )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert configuration to dictionary."""
+        """To dict."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> BoostLockConfig:
-        """Create BoostLockConfig from a dictionary, ignoring extraneous keys."""
+        """From dict, ignore unknown keys."""
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         filtered_data = {k: v for k, v in data.items() if k in valid_keys}
         return cls(**filtered_data)
 
     def to_json(self, path: Optional[str] = None) -> str:
-        """Serialize configuration to JSON string or write to file path."""
+        """To JSON."""
         json_str = json.dumps(self.to_dict(), indent=2)
         if path:
             p = Path(path)
@@ -136,7 +136,7 @@ class BoostLockConfig:
 
     @classmethod
     def from_json(cls, json_str_or_path: str) -> BoostLockConfig:
-        """Load configuration from JSON string or file path."""
+        """From JSON."""
         if os.path.isfile(json_str_or_path):
             with open(json_str_or_path, "r", encoding="utf-8") as f:
                 data = json.load(f)

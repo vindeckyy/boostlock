@@ -17,7 +17,7 @@ from .sysfs import SysfsController
 
 @dataclass
 class BenchSample:
-    """One instantaneous sample of all online-CPU frequencies."""
+    """One freq sample."""
 
     timestamp: float
     """Wall-clock time of the sample."""
@@ -31,7 +31,7 @@ class BenchSample:
 
 @dataclass
 class BenchResult:
-    """Aggregate statistics from a completed benchmark run."""
+    """Bench results."""
 
     target_khz: int
     """Boost target frequency in kHz (e.g. 4_000_000 for 4.0 GHz)."""
@@ -44,7 +44,7 @@ class BenchResult:
 
     # Per-sample aggregate stats (all CPUs merged)
     all_samples_khz: List[int] = field(default_factory=list)
-    """Flat list of every (cpu, sample) frequency value."""
+    """All sampled values."""
 
     min_khz: int = 0
     max_khz: int = 0
@@ -54,22 +54,22 @@ class BenchResult:
     p99_khz: int = 0
 
     compliance_rate: float = 0.0
-    """Fraction of samples at or above *target_khz* (0.0-1.0)."""
+    """Share at or above target."""
 
     temp_start_c: Optional[float] = None
     temp_end_c: Optional[float] = None
     thermal_gradient_c: Optional[float] = None
-    """Temperature rise (end - start) in C, if available."""
+    """Temp delta if available."""
 
     elapsed_s: float = 0.0
-    """Actual elapsed wall time of the benchmark run."""
+    """Wall time."""
     policy_id: Optional[str] = None
-    """Policy sampled for this result, when one target owns the samples."""
+    """Policy for this result."""
     policy_results: Dict[str, BenchResult] = field(default_factory=dict)
-    """Per-policy results, each evaluated against that policy's target."""
+    """Per-policy breakdown."""
 
     def format_report(self) -> str:
-        """Return a human-readable multi-line benchmark report."""
+        """Format a bench report."""
         lines: List[str] = []
         lines.append("=" * 60)
         lines.append("  BoostLock Benchmark Report")
@@ -114,7 +114,7 @@ class BenchResult:
 
 
 def _percentile(sorted_data: List[int], pct: float) -> int:
-    """Return the *pct*-th percentile of a pre-sorted list (0-100)."""
+    """Percentile of sorted data."""
     if not sorted_data:
         return 0
     if pct <= 0:

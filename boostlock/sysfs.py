@@ -17,27 +17,27 @@ logger = logging.getLogger(__name__)
 
 
 class SysfsError(Exception):
-    """Base exception for sysfs operations."""
+    """Sysfs error."""
     pass
 
 
 class SysfsPermissionError(SysfsError, PermissionError):
-    """Raised when sysfs read/write fails due to insufficient permissions."""
+    """Sysfs permission error."""
     pass
 
 
 class SysfsNotFoundError(SysfsError, FileNotFoundError):
-    """Raised when a required sysfs path does not exist."""
+    """Sysfs path missing."""
     pass
 
 
 class SysfsCorruptError(SysfsError, ValueError):
-    """Raised when sysfs file contains invalid or corrupted data."""
+    """Bad sysfs data."""
     pass
 
 
 class CapabilityState(str, Enum):
-    """Whether a cpufreq control can be used on a discovered policy."""
+    """Whether a control is usable."""
 
     AVAILABLE = "available"
     UNAVAILABLE = "unavailable"
@@ -46,7 +46,7 @@ class CapabilityState(str, Enum):
 
 @dataclass
 class CpufreqPolicy:
-    """Inventory of one Linux cpufreq policy and its exposed controls."""
+    """One cpufreq policy and what it exposes."""
 
     identifier: str
     path: Path
@@ -77,7 +77,7 @@ class CpufreqPolicy:
 
 @dataclass(frozen=True)
 class PolicyApplyAction:
-    """One reversible cpufreq write prepared from a policy inventory."""
+    """One cpufreq write to apply."""
 
     policy_id: str
     control: str
@@ -88,7 +88,7 @@ class PolicyApplyAction:
 
 @dataclass
 class PolicyApplyPlan:
-    """A complete, preflightable set of policy-owned sysfs writes."""
+    """Set of writes to apply together."""
 
     actions: List[PolicyApplyAction]
     skipped_controls: Dict[str, Dict[str, str]]
@@ -96,7 +96,7 @@ class PolicyApplyPlan:
 
 
 def parse_cpu_range(range_str: str) -> List[int]:
-    """Parse CPU range string like '0-3,5,7-8' into sorted list of integers."""
+    """Parse a CPU range like 0-3,5 into a list."""
     cpus: set[int] = set()
     range_str = range_str.strip()
     if not range_str:
@@ -123,18 +123,18 @@ def parse_cpu_range(range_str: str) -> List[int]:
 
 
 class SysfsController:
-    """Provides high-level, typed, mockable access to Linux kernel CPU sysfs nodes."""
+    """Wraps cpufreq sysfs."""
 
     def __init__(self, sysfs_root: Union[str, Path] = "/sys") -> None:
         self.sysfs_root = Path(sysfs_root).resolve()
 
     def _resolve_path(self, subpath: str) -> Path:
-        """Resolve a relative subpath against sysfs root."""
+        """Resolve subpath under sysfs root."""
         clean_subpath = subpath.lstrip("/")
         return self.sysfs_root / clean_subpath
 
     def _read_file(self, subpath: str) -> Optional[str]:
-        """Read content from sysfs file. Returns None if file does not exist."""
+        """Read a sysfs file, None if missing."""
         path = self._resolve_path(subpath)
         if not path.is_file():
             return None
@@ -149,8 +149,7 @@ class SysfsController:
             return None
 
     def _write_file(self, subpath: str, value: str, optional: bool = False) -> bool:
-        """
-        Write string value to sysfs file.
+        """Write a value to sysfs.
         Returns True if successful, False if file doesn't exist and optional=True.
         """
         path = self._resolve_path(subpath)

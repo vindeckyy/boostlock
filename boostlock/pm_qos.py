@@ -22,22 +22,22 @@ INT32_MAX = 2147483647
 
 
 class PMQoSError(Exception):
-    """Base exception for PM QoS operations."""
+    """PM QoS error."""
     pass
 
 
 class PMQoSPermissionError(PMQoSError, PermissionError):
-    """Raised when opening or writing to /dev/cpu_dma_latency fails due to permissions."""
+    """PM QoS permission error."""
     pass
 
 
 class PMQoSNotFoundError(PMQoSError, FileNotFoundError):
-    """Raised when /dev/cpu_dma_latency does not exist and fallback is disabled."""
+    """PM QoS device missing."""
     pass
 
 
 class PMQoSLockError(PMQoSError):
-    """Raised when PM QoS lock cannot be acquired or modified."""
+    """PM QoS lock failed."""
     pass
 
 

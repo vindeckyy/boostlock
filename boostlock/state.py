@@ -30,23 +30,23 @@ SNAPSHOT_FILENAME = "snapshot.json"
 
 
 class StateError(Exception):
-    """Base exception for system state snapshot and rollback operations."""
+    """State error."""
     pass
 
 
 class StateSnapshotError(StateError):
-    """Raised when capturing system state fails."""
+    """Snapshot failed."""
     pass
 
 
 class StateRestoreError(StateError):
-    """Raised when restoring system state fails."""
+    """Restore failed."""
     pass
 
 
 @dataclass
 class CPUStateSnapshot:
-    """Snapshot of cpufreq and cpuidle attributes for a single logical CPU."""
+    """Saved state for one CPU."""
 
     cpu_id: int
     governor: Optional[str] = None
@@ -76,7 +76,7 @@ class CPUStateSnapshot:
 
 @dataclass
 class PolicyStateSnapshot:
-    """Writable cpufreq values captured for one stable kernel policy."""
+    """Saved state for one policy."""
 
     policy_id: str
     cpus: List[int]
@@ -112,7 +112,7 @@ class PolicyStateSnapshot:
 
 @dataclass
 class SystemStateSnapshot:
-    """Policy-keyed CPU controls, with legacy per-CPU fields for old snapshots."""
+    """Saved system state (policy-keyed)."""
 
     policies: Dict[str, PolicyStateSnapshot] = field(default_factory=dict)
     global_boost: Optional[bool] = None

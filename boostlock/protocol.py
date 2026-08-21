@@ -192,12 +192,12 @@ class Response:
 
 
 def encode_request(req: Request) -> bytes:
-    """Serialize Request to newline-terminated UTF-8 JSON bytes."""
+    """Encode request."""
     return (json.dumps(req.to_dict()) + "\n").encode("utf-8")
 
 
 def decode_request(raw_bytes: bytes) -> Request:
-    """Deserialize newline-terminated UTF-8 JSON bytes into Request."""
+    """Decode request."""
     raw_str = raw_bytes.decode("utf-8").strip()
     if not raw_str:
         raise InvalidMessageError("Empty request payload")
@@ -209,12 +209,12 @@ def decode_request(raw_bytes: bytes) -> Request:
 
 
 def encode_response(res: Response) -> bytes:
-    """Serialize Response to newline-terminated UTF-8 JSON bytes."""
+    """Encode response."""
     return (json.dumps(res.to_dict()) + "\n").encode("utf-8")
 
 
 def decode_response(raw_bytes: bytes) -> Response:
-    """Deserialize newline-terminated UTF-8 JSON bytes into Response."""
+    """Decode response."""
     raw_str = raw_bytes.decode("utf-8").strip()
     if not raw_str:
         raise InvalidMessageError("Empty response payload")

@@ -2,27 +2,12 @@
 
 ## 0.2.0 - 2026-08-20
 
-### CPU policy support
-
-- Discover CPU controls through Linux cpufreq policies, including Intel, AMD, ARM, and other drivers that expose writable policy controls.
-- Keep each policy's governor, frequency range, target, pulse duty, state snapshot, restore path, status, and benchmark result separate.
-- Apply boost, CPB, EPP, EPB, PM QoS, and cpuidle controls only when the kernel exposes a writable path.
-
-### Target behavior
-
-- Add `--target auto` to start and benchmark commands. Omitting `--target` now uses each policy's active upper frequency limit.
-- Keep numeric targets as explicit MHz requests and clamp them within each policy's usable range.
-- Return policy targets, clamp reasons, applied controls, and skipped controls through status and IPC reconfiguration responses.
-- Remove the fixed 4 GHz target from the bundled systemd unit.
-
-### Safety and verification
-
-- Preflight every planned write before the first mutation and roll back completed actions when a later action fails.
-- Keep PM QoS device access and cpuidle fallback inside the same startup transaction as cpufreq changes.
-- Add policy fixtures and contracts for shared policies, mixed limits, missing controls, write failures, rollback, and automatic targets.
-- Run 415 automated tests with 97.07 percent coverage. Physical hardware smoke tests remain necessary before calling an untested driver verified.
+- Per-policy cpufreq handling. Discovers `policy*` dirs, keeps governor/limits/target/duty/restore separate for each. Falls back to `cpuN/cpufreq` when policies are not there. Drivers that expose writable policy controls work, that includes intel_pstate, amd-pstate, acpi-cpufreq and generic.
+- `auto` target. `--target auto` (the default now if you omit `--target`) uses each policy's current max. Numeric targets are clamped per policy. Status and bench now show requested vs effective target plus what got applied or skipped.
+- Safer startup. Preflight all writes before touching anything, roll back in reverse order if something fails mid-apply. PM QoS and the cpuidle fallback are part of the same transaction.
+- Systemd unit no longer ships a fixed 4 GHz target.
+- More tests, fixtures for shared policies, mixed limits, missing controls and rollback. Still need real hardware checks for new drivers.
 
 ## 0.1.0
 
-- First public release.
-- Adds CPU boost control, thermal limits, state restoration, a systemd unit, and a benchmark command.
+- First release. Governor and boost control, thermal limits, state restore, systemd unit and `bench`.
